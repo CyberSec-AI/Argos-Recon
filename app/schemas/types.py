@@ -1,6 +1,7 @@
+# app/schemas/types.py
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Literal, Tuple, Union, Any
 from pydantic import BaseModel, Field
 
 
@@ -31,13 +32,28 @@ class TLSArtifactV1(BaseModel):
     observed_host: str
     ip: str
     port: int
+    
+    # Identité du Certificat
     cn: Optional[str] = None
     san: List[str] = Field(default_factory=list)
     issuer_dn: Optional[str] = None
+    serial_number: Optional[str] = None
+    
+    # Validité & Confiance
     self_signed: bool = False
     not_before: Optional[str] = None
     not_after: Optional[str] = None
-    hash: Optional[str] = None
+    
+    # Fingerprinting Technique
+    hash: Optional[str] = None  # SHA256 du DER
+    
+    # Configuration TLS (Nouveau !)
+    protocol: Optional[str] = None  # ex: TLSv1.3
+    cipher: Optional[str] = None    # ex: TLS_AES_128_GCM_SHA256
+    alpn: Optional[str] = None      # ex: h2
+    
+    # Diagnostic (Nouveau !)
+    error: Optional[str] = None
 
 
 class HTTPRequestArtifactV1(BaseModel):
