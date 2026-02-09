@@ -69,7 +69,10 @@ class HTTPRequestArtifactV1(BaseModel):
     
     response_analysis_snippet: Optional[str] = None
 
+    # V3.3 : Status optionnel et Error explicite
     status_code: Optional[int] = None
+    error: Optional[str] = None
+
     headers: Dict[str, str] = Field(default_factory=dict)
     timings_ms: TimingsMs = Field(default_factory=TimingsMs)
     tags: List[str] = Field(default_factory=list)

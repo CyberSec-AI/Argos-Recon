@@ -47,7 +47,10 @@ def extract_signals(tls_artifact: TLSArtifactV1, http_artifacts: List[HTTPReques
     api_protected = False
     
     for art in http_artifacts:
-        if "api_recon" not in art.tags and "probe" not in art.tags: continue
+        # CORRECTION V3.4 : On accepte aussi la baseline pour détecter l'UI à la racine
+        relevant_tags = ["api_recon", "probe", "baseline"]
+        if not any(tag in art.tags for tag in relevant_tags): 
+            continue
 
         is_doc_path = any(k in art.url.lower() for k in DOC_PATH_KEYWORDS)
 
@@ -63,13 +66,11 @@ def extract_signals(tls_artifact: TLSArtifactV1, http_artifacts: List[HTTPReques
                 has_api_key = "openapi" in snippet or "swagger" in snippet
                 has_structure = any(k in snippet for k in ["paths", "components", "definitions", "schemes"])
                 
-                # Correction V3.1 : On garde le premier hit seulement
                 if has_api_key and has_structure and not spec_found_ref:
                     spec_found_ref = art.request_id
 
             # 2. UI (Medium)
             if API_SWAGGER_UI_RE.search(snippet):
-                # Correction V3.1 : On garde le premier hit seulement
                 if not ui_found_ref:
                     ui_found_ref = art.request_id
         

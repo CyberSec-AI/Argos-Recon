@@ -58,19 +58,18 @@ async def _perform_request(client: httpx.AsyncClient, target: dict, path: str, r
     t0 = time.perf_counter()
     body_buffer = bytearray()
     snippet_text = ""
-    status_code = 0
+    status_code = None
+    error_msg = None
     res_headers = {}
     response_truncated = False
     effective_url = full_url
-    protocol_version = "HTTP/1.1" # Valeur par défaut sûre
+    protocol_version = "HTTP/1.1"
     
     try:
         async with client.stream("GET", full_url, headers=headers) as r:
             status_code = r.status_code
             res_headers = {k.lower(): str(v) for k, v in r.headers.items()}
             effective_url = str(r.url)
-            
-            # Correction V3.1 : Capture robuste de la version HTTP
             protocol_version = getattr(r, "http_version", None) or "HTTP/1.1"
             
             limit_soft = 32 * 1024 
@@ -89,8 +88,14 @@ async def _perform_request(client: httpx.AsyncClient, target: dict, path: str, r
             except:
                 snippet_text = ""
 
-    except httpx.RequestError:
-        pass
+    except httpx.TimeoutException:
+        error_msg = "timeout"
+    except httpx.ConnectError:
+        error_msg = "connection_refused"
+    except httpx.RequestError as e:
+        error_msg = f"network_error:{type(e).__name__}"
+    except Exception as e:
+        error_msg = f"internal_error:{type(e).__name__}"
         
     t1 = time.perf_counter()
     total_ms = int((t1 - t0) * 1000)
@@ -108,7 +113,11 @@ async def _perform_request(client: httpx.AsyncClient, target: dict, path: str, r
         response_raw=response_raw, response_raw_encoding="base64" if response_raw else None,
         response_truncated=response_truncated, response_hash=response_hash,
         response_analysis_snippet=snippet_text,
-        status_code=status_code, headers=res_headers, timings_ms=TimingsMs(total=total_ms), tags=tags
+        
+        status_code=status_code,
+        error=error_msg,
+        
+        headers=res_headers, timings_ms=TimingsMs(total=total_ms), tags=tags
     )
 
 
