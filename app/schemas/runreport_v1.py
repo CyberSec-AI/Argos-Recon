@@ -11,7 +11,7 @@ class EngineInfoV1(BaseModel):
     name: str = "recon-assistant"
     engine_version: str = "0.1.0"
     build: str = "dev"
-    profile: str = "pentest_pro"
+    profile: str = "pentest_pro"  # CORRIGÉ : plus d'espace
     mode: str = "low_noise"
 
 

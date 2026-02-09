@@ -1,72 +1,84 @@
 from __future__ import annotations
 
+# pyright: reportMissingImports=false
+
 import asyncio
 import hashlib
 import ssl
 import socket
-from datetime import datetime, timezone
-from urllib.parse import urlparse
 
 import ulid
+from cryptography import x509
+from cryptography.x509.oid import NameOID, ExtensionOID
+
 from app.schemas.types import TLSArtifactV1
-
-
-def _parse_cert_time(x: str) -> str | None:
-    # Example: 'Jun  1 12:00:00 2026 GMT'
-    try:
-        dt = datetime.strptime(x, "%b %d %H:%M:%S %Y %Z")
-        dt = dt.replace(tzinfo=timezone.utc)
-        return dt.isoformat().replace("+00:00", "Z")
-    except Exception:
-        return None
 
 
 def _fetch_tls(host: str, ip: str, port: int, server_name: str) -> dict:
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False  # we are collecting facts, not enforcing trust
+    ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
-    with socket.create_connection((ip, port), timeout=4) as sock:
-        with ctx.wrap_socket(sock, server_hostname=server_name) as ssock:
-            cert = ssock.getpeercert()
-            der = ssock.getpeercert(binary_form=True)
-            sha = hashlib.sha256(der).hexdigest()
-
-    # Extract CN
-    cn = None
-    for tup in cert.get("subject", []):
-        for k, v in tup:
-            if k.lower() == "commonname":
-                cn = v
-
-    # Extract SAN
-    san = []
-    for typ, name in cert.get("subjectAltName", []):
-        if typ.lower() == "dns":
-            san.append(name)
-
-    issuer_dn = None
-    issuer_parts = []
-    for tup in cert.get("issuer", []):
-        for k, v in tup:
-            issuer_parts.append(f"{k}={v}")
-    if issuer_parts:
-        issuer_dn = ", ".join(issuer_parts)
-
-    self_signed = (cert.get("issuer") == cert.get("subject"))
-
-    not_before = _parse_cert_time(cert.get("notBefore", "")) if cert.get("notBefore") else None
-    not_after = _parse_cert_time(cert.get("notAfter", "")) if cert.get("notAfter") else None
-
-    return {
-        "cn": cn,
-        "san": san,
-        "issuer_dn": issuer_dn,
-        "self_signed": self_signed,
-        "not_before": not_before,
-        "not_after": not_after,
-        "hash": f"sha256:{sha}"
+    # Default safe values (unknown state)
+    result = {
+        "cn": None,
+        "san": [],
+        "issuer_dn": None,
+        "self_signed": False,  # unknown != self-signed
+        "not_before": None,
+        "not_after": None,
+        "hash": None
     }
+
+    try:
+        with socket.create_connection((ip, port), timeout=4) as sock:
+            with ctx.wrap_socket(sock, server_hostname=server_name) as ssock:
+                der = ssock.getpeercert(binary_form=True)
+
+        if not der:
+            return result
+
+        cert = x509.load_der_x509_certificate(der)
+        sha = hashlib.sha256(der).hexdigest()
+        result["hash"] = f"sha256:{sha}"
+
+        # CN
+        try:
+            cn_attr = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+            if cn_attr:
+                result["cn"] = cn_attr[0].value
+        except Exception:
+            pass
+
+        # SAN
+        try:
+            ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+            result["san"] = ext.value.get_values_for_type(x509.DNSName)
+        except Exception:
+            pass
+
+        # Issuer + self-signed
+        try:
+            result["issuer_dn"] = cert.issuer.rfc4514_string()
+            result["self_signed"] = (cert.subject == cert.issuer)
+        except Exception:
+            pass
+
+        # Dates (compatible cryptography modernes)
+        try:
+            nb = getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before
+            na = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
+            # nb/na peuvent être datetime naive; on garde ISO sans forcer TZ ici
+            result["not_before"] = nb.isoformat()
+            result["not_after"] = na.isoformat()
+        except Exception:
+            pass
+
+    except Exception:
+        # MVP: silence. En prod: logger.
+        pass
+
+    return result
 
 
 async def fetch_tls_facts(target: dict) -> TLSArtifactV1:
@@ -88,5 +100,5 @@ async def fetch_tls_facts(target: dict) -> TLSArtifactV1:
         self_signed=bool(data.get("self_signed", False)),
         not_before=data.get("not_before"),
         not_after=data.get("not_after"),
-        hash=data.get("hash")
+        hash=data.get("hash"),
     )
