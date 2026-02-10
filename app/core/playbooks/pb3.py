@@ -3,7 +3,6 @@ import ulid
 from typing import Optional, List, Dict
 from dataclasses import dataclass
 
-# SUPPRIMÉ : BurpArtifactsV1 (inutile ici)
 from app.schemas.finding_v1 import FindingV1, FindingScoreV1, FindingTargetRefV1, FindingEvidenceRefV1
 from app.schemas.types import DNSArtifactV1
 
@@ -86,7 +85,7 @@ def analyze_dmarc(dmarc_txt: List[str]) -> DMARCAnalysis:
     return DMARCAnalysis(True, rec, tags, p.lower() if p else None, warn)
 
 def evaluate_pb3(dns: DNSArtifactV1, target: dict) -> Optional[FindingV1]:
-    # Sécurité anti-faux positifs : Si le DNS a planté (timeout), on n'analyse pas
+    # Sécurité anti-faux positifs
     if dns.error:
         return None
 
@@ -138,18 +137,17 @@ def evaluate_pb3(dns: DNSArtifactV1, target: dict) -> Optional[FindingV1]:
 
     evidence_list = []
     
-    # CORRECTION : Refs explicites pour traçabilité
     evidence_list.append(FindingEvidenceRefV1(
         evidence_id=f"ev_spf_{str(ulid.new())}",
         type="dns_txt",
-        ref={"artifact": "dns", "field": "txt"}, # Explicite
+        ref={"artifact": "dns", "field": "txt"},
         snippet=f"SPF: {spf.record or 'Missing'} ({spf.warning or 'OK'})"
     ))
     
     evidence_list.append(FindingEvidenceRefV1(
         evidence_id=f"ev_dmarc_{str(ulid.new())}",
         type="dns_txt",
-        ref={"artifact": "dns", "field": "dmarc"}, # Explicite
+        ref={"artifact": "dns", "field": "dmarc"},
         snippet=f"DMARC: {dmarc.record or 'Missing'} ({dmarc.warning or 'OK'})"
     ))
 
@@ -172,5 +170,6 @@ def evaluate_pb3(dns: DNSArtifactV1, target: dict) -> Optional[FindingV1]:
         },
         signals=[],
         evidence=evidence_list,
-        burp_artifacts=None
+        # CORRECTION ICI : On passe un dict vide valide au lieu de None
+        burp_artifacts={"urls": []}
     )
