@@ -66,7 +66,7 @@ async def analyze(req: AnalyzeRequest):
         probes_artifacts = await probe_paths(target, safe_probe_list, response_raw_max_bytes=262144)
         all_http_artifacts = [http_baseline] + probes_artifacts
 
-        # 3. CMS Detection (NOUVEAU)
+        # 3. CMS Detection
         cms_artifact = detect_cms(target, all_http_artifacts)
 
         # 4. Intelligence
@@ -88,7 +88,7 @@ async def analyze(req: AnalyzeRequest):
         finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         duration_ms = int((time.perf_counter() - started) * 1000)
 
-        # 5. Reporting (Wiring Propre)
+        # 5. Reporting (Wiring Clean)
         report = build_report(
             target_raw=target,
             tls_artifact=tls_artifact,
@@ -99,7 +99,7 @@ async def analyze(req: AnalyzeRequest):
             finished_at=finished_at,
             duration_ms=duration_ms,
             dns_artifact=dns_artifact,
-            cms_artifact=cms_artifact # Argument natif
+            cms_artifact=cms_artifact # <-- Passed natively
         )
         
         return report.model_dump()
