@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import ulid
 import hashlib
-# Suppression de 'import time' inutile ici
 from typing import List, Optional
 
-from app.schemas.runreport_v1 import RunReportV1, RunReportArtifactsV1, RunReportSummaryV1, RunReportSNR, FindingCountsV1
-from app.schemas.types import TLSArtifactV1, HTTPRequestArtifactV1, SignalV1, DNSArtifactV1
+from app.schemas.runreport_v1 import (
+    RunReportV1,
+    RunReportArtifactsV1,
+    RunReportSummaryV1,
+    RunReportSNR,
+    FindingCountsV1
+)
+# AJOUT : Import CMSArtifactV1
+from app.schemas.types import TLSArtifactV1, HTTPRequestArtifactV1, SignalV1, DNSArtifactV1, CMSArtifactV1
 from app.schemas.finding_v1 import FindingV1
 
 def build_report(
@@ -18,13 +24,13 @@ def build_report(
     started_at: str,
     finished_at: str,
     duration_ms: int,
-    dns_artifact: Optional[DNSArtifactV1] = None
+    dns_artifact: Optional[DNSArtifactV1] = None,
+    # AJOUT : Argument natif optionnel
+    cms_artifact: Optional[CMSArtifactV1] = None
 ) -> RunReportV1:
     
-    # 1. Génération ID Run
     run_id_val = str(ulid.new())
 
-    # 2. Stats
     counts = {k: 0 for k in ["critical", "high", "medium", "low", "info"]}
     for f in findings:
         counts[f.severity] += 1
@@ -35,21 +41,17 @@ def build_report(
     if findings:
         verdict = findings[0].title 
 
-    # 3. Artefacts (Injection native)
+    # AJOUT : Mapping propre dans la section artifacts
     artifacts_section = RunReportArtifactsV1(
         requests=http_artifacts,
         tls=[tls_artifact] if tls_artifact.ip else [],
-        dns=dns_artifact
+        dns=dns_artifact,
+        cms=cms_artifact 
     )
     
-    # 4. Fingerprints
-    # Target FP : URL Canonique
     target_fp = f"sha256:{hashlib.sha256(target_raw['canonical_url'].encode()).hexdigest()}"
-    
-    # Run FP : Basé sur l'ULID (unique et temporel), plus fiable que time.time()
     run_fp = f"sha256:{hashlib.sha256(run_id_val.encode()).hexdigest()}"
 
-    # Finding FP : Basé sur ID + Titre pour unicité et traçabilité
     finding_fps = [
         {"finding_id": f.finding_id, "fingerprint": f"sha256:{hashlib.sha256((f.finding_id + f.title).encode()).hexdigest()}"} 
         for f in findings

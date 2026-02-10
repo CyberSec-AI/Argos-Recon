@@ -81,20 +81,26 @@ class DNSArtifactV1(BaseModel):
     dns_id: str
     target_id: str
     domain: str
-    
-    # Enregistrements
     a: List[str] = Field(default_factory=list)
     aaaa: List[str] = Field(default_factory=list)
     mx: List[str] = Field(default_factory=list)
     ns: List[str] = Field(default_factory=list)
     txt: List[str] = Field(default_factory=list)
-    
-    # NOUVEAU : DMARC spécifique (_dmarc.<domain>)
     dmarc: List[str] = Field(default_factory=list)
-    
     soa: Optional[str] = None
     cname: Optional[str] = None
-    
+    timings_ms: int = 0
+    error: Optional[str] = None
+
+
+# NOUVEAU : CMSArtifactV1
+class CMSArtifactV1(BaseModel):
+    cms_id: str
+    target_id: str
+    detected_cms: Literal["wordpress", "joomla", "drupal", "unknown"] = "unknown"
+    version: Optional[str] = None
+    confidence: Confidence = "low"
+    evidence: List[str] = Field(default_factory=list)
     timings_ms: int = 0
     error: Optional[str] = None
 

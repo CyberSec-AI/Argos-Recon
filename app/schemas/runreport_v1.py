@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
-from app.schemas.types import HTTPRequestArtifactV1, TLSArtifactV1, SignalV1, DNSArtifactV1
+from app.schemas.types import HTTPRequestArtifactV1, TLSArtifactV1, SignalV1, DNSArtifactV1, CMSArtifactV1
 from app.schemas.finding_v1 import FindingV1
 
 class FindingCountsV1(BaseModel):
@@ -28,6 +28,8 @@ class RunReportArtifactsV1(BaseModel):
     requests: List[HTTPRequestArtifactV1] = Field(default_factory=list)
     tls: List[TLSArtifactV1] = Field(default_factory=list)
     dns: Optional[DNSArtifactV1] = None
+    # NOUVEAU : Champ CMS natif
+    cms: Optional[CMSArtifactV1] = None
 
 class RunReportV1(BaseModel):
     schema_version: str = "runreport.v1"
