@@ -1,20 +1,12 @@
 from __future__ import annotations
-
-from typing import Dict, List, Optional, Literal
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
+# --- Enums (Indispensables pour finding_v1.py) ---
+Severity = Literal["critical", "high", "medium", "low", "info"]
+Confidence = Literal["high", "medium", "low"]
 
-Severity = Literal["info", "low", "medium", "high", "critical"]
-Confidence = Literal["low", "medium", "high"]
-
-
-class TimingsMs(BaseModel):
-    dns: int = 0
-    tcp: int = 0
-    tls: int = 0
-    ttfb: int = 0
-    total: int = 0
-
+# --- Modèles de base ---
 
 class TargetV1(BaseModel):
     target_id: str
@@ -23,7 +15,17 @@ class TargetV1(BaseModel):
     host: str
     resolved_ips: List[str] = Field(default_factory=list)
     ports: List[int] = Field(default_factory=list)
+    scheme: Optional[str] = "https"
+    port: Optional[int] = None 
 
+class TimingsMs(BaseModel):
+    """Modèle structuré pour les temps de réponse."""
+    total: int = 0
+    dns: Optional[int] = None
+    connect: Optional[int] = None
+    handshake: Optional[int] = None
+
+# --- Artefacts ---
 
 class TLSArtifactV1(BaseModel):
     tls_id: str
@@ -31,51 +33,36 @@ class TLSArtifactV1(BaseModel):
     observed_host: str
     ip: str
     port: int
-    cn: Optional[str] = None
-    san: List[str] = Field(default_factory=list)
-    issuer_dn: Optional[str] = None
-    serial_number: Optional[str] = None
-    self_signed: bool = False
-    not_before: Optional[str] = None
-    not_after: Optional[str] = None
-    hash: Optional[str] = None
     protocol: Optional[str] = None
     cipher: Optional[str] = None
-    alpn: Optional[str] = None
+    cn: Optional[str] = None
+    not_after: Optional[str] = None
+    issuer_o: Optional[str] = None
+    
     error: Optional[str] = None
-
+    # Utilisation stricte du modèle TimingsMs
+    timings_ms: TimingsMs = Field(default_factory=TimingsMs)
 
 class HTTPRequestArtifactV1(BaseModel):
     request_id: str
     target_id: str
-    
     url: str
-    effective_url: str 
-    
-    host: str
-    ip: str
-    port: int
-    tls: bool
-    protocol: str = "HTTP/1.1"
+    effective_url: Optional[str] = None
+    host: Optional[str] = None
+    ip: Optional[str] = None
+    port: Optional[int] = None
+    tls: bool = False
     method: str
-    
-    raw: str
-    raw_encoding: str = "base64"
-
-    response_raw: Optional[str] = None
-    response_raw_encoding: Optional[str] = None
-    response_truncated: bool = False
-    response_hash: Optional[str] = None 
-    
-    response_analysis_snippet: Optional[str] = None
-
     status_code: Optional[int] = None
-    error: Optional[str] = None
-
     headers: Dict[str, str] = Field(default_factory=dict)
+    
+    response_truncated: bool = False
+    response_analysis_snippet: Optional[str] = None
+    raw: Optional[str] = None 
+    
+    error: Optional[str] = None
+    # Utilisation stricte du modèle TimingsMs
     timings_ms: TimingsMs = Field(default_factory=TimingsMs)
-    tags: List[str] = Field(default_factory=list)
-
 
 class DNSArtifactV1(BaseModel):
     dns_id: str
@@ -83,34 +70,33 @@ class DNSArtifactV1(BaseModel):
     domain: str
     a: List[str] = Field(default_factory=list)
     aaaa: List[str] = Field(default_factory=list)
+    cname: Optional[str] = None
     mx: List[str] = Field(default_factory=list)
     ns: List[str] = Field(default_factory=list)
     txt: List[str] = Field(default_factory=list)
     dmarc: List[str] = Field(default_factory=list)
     soa: Optional[str] = None
-    cname: Optional[str] = None
-    timings_ms: int = 0
+    
     error: Optional[str] = None
+    # Utilisation stricte du modèle TimingsMs
+    timings_ms: TimingsMs = Field(default_factory=TimingsMs)
 
-
-# NOUVEAU : CMSArtifactV1
 class CMSArtifactV1(BaseModel):
     cms_id: str
     target_id: str
-    detected_cms: Literal["wordpress", "joomla", "drupal", "unknown"] = "unknown"
+    detected_cms: str = "unknown"
     version: Optional[str] = None
-    confidence: Confidence = "low"
+    confidence: str = "low"
     evidence: List[str] = Field(default_factory=list)
-    timings_ms: int = 0
-    error: Optional[str] = None
-
+    # On garde int ici pour compatibilité simple (ou TimingsMs si tu mets à jour cms.py)
+    timings_ms: int = 0 
 
 class SignalV1(BaseModel):
     signal_id: str
-    source: Literal["tls", "http", "tech"]
+    source: str
     target_id: str
-    value: bool
+    value: Any
     weight: int = 1
-    signal_confidence: float = 0.9
-    evidence_refs: List[str] = Field(default_factory=list)
-    artifact_ref: Optional[str] = None
+    signal_confidence: float = 1.0
+    evidence_refs: List[Any] = Field(default_factory=list)
+    artifact_ref: Optional[Any] = None

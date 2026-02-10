@@ -6,12 +6,13 @@ from datetime import datetime
 from app.core.config import ENGINE_VERSION
 from app.schemas.runreport_v1 import (
     RunReportV1, RunReportArtifactsV1, RunReportSummaryV1, 
-    RunReportSNR, FindingCountsV1
+    RunReportSNR, FindingCountsV1, ReportErrorV1 # Import nouveau modèle
 )
 from app.schemas.context import ScanContext
 
 def build_report_from_context(ctx: ScanContext, finished_at: datetime, duration_ms: int) -> RunReportV1:
     
+    # 1. Counts
     counts_map = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for f in ctx.findings:
         sev = f.severity.lower()
@@ -20,6 +21,7 @@ def build_report_from_context(ctx: ScanContext, finished_at: datetime, duration_
         else:
             counts_map["info"] += 1
 
+    # 2. Tri & Verdict
     severity_rank = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
     sorted_findings = sorted(
         ctx.findings, 
@@ -44,6 +46,17 @@ def build_report_from_context(ctx: ScanContext, finished_at: datetime, duration_
         cms=ctx.cms
     )
 
+    # 3. Conversion des erreurs pour le rapport
+    report_errors = []
+    for e in ctx.errors:
+        report_errors.append(ReportErrorV1(
+            component=e.component,
+            error_type=e.error_type,
+            message=e.message,
+            timestamp=e.timestamp.isoformat()
+        ))
+
+    # Fingerprinting
     target_canon = ctx.target.canonical_url
     target_fp = f"sha256:{hashlib.sha256(target_canon.encode()).hexdigest()}"
     finding_fps = [{"finding_id": f.finding_id, "fingerprint": f"sha256:{hashlib.sha256((f.finding_id + f.title).encode()).hexdigest()}"} for f in ctx.findings]
@@ -56,6 +69,8 @@ def build_report_from_context(ctx: ScanContext, finished_at: datetime, duration_
         operator={"type": "user", "id": "local"},
         scope={"intent": "recon", "targets": [ctx.target.model_dump()]},
         summary=RunReportSummaryV1(finding_counts=FindingCountsV1(**counts_map), top_findings=top_findings, snr=RunReportSNR(signals_total=len(ctx.signals), findings_total=len(ctx.findings), requests_total=len(ctx.http)), verdict=verdict),
+        # Injection des erreurs
+        errors=report_errors,
         delta={"delta_ready": True, "target_fingerprint": target_fp, "finding_fingerprints": finding_fps},
         artifacts=artifacts_section, signals=ctx.signals, findings=ctx.findings
     )

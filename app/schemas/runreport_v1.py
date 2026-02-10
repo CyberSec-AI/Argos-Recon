@@ -1,10 +1,8 @@
 from __future__ import annotations
-
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
-from app.schemas.types import HTTPRequestArtifactV1, TLSArtifactV1, SignalV1, DNSArtifactV1, CMSArtifactV1
-from app.schemas.finding_v1 import FindingV1
+# --- Sous-modèles ---
 
 class FindingCountsV1(BaseModel):
     critical: int = 0
@@ -14,6 +12,7 @@ class FindingCountsV1(BaseModel):
     info: int = 0
 
 class RunReportSNR(BaseModel):
+    """Signal-to-Noise Ratio metrics."""
     signals_total: int
     findings_total: int
     requests_total: int
@@ -21,25 +20,36 @@ class RunReportSNR(BaseModel):
 class RunReportSummaryV1(BaseModel):
     finding_counts: FindingCountsV1
     top_findings: List[str] = Field(default_factory=list)
-    snr: RunReportSNR
-    verdict: str
+    snr: Optional[RunReportSNR] = None
+    verdict: str = "unknown"
 
 class RunReportArtifactsV1(BaseModel):
-    requests: List[HTTPRequestArtifactV1] = Field(default_factory=list)
-    tls: List[TLSArtifactV1] = Field(default_factory=list)
-    dns: Optional[DNSArtifactV1] = None
-    # NOUVEAU : Champ CMS natif
-    cms: Optional[CMSArtifactV1] = None
+    requests: List[Any] = Field(default_factory=list)
+    tls: List[Any] = Field(default_factory=list)
+    dns: Optional[Any] = None
+    cms: Optional[Any] = None
 
+# --- Modèle d'erreur pour le rapport ---
+class ReportErrorV1(BaseModel):
+    component: str
+    error_type: str
+    message: str
+    timestamp: str
+
+# --- Modèle Principal ---
 class RunReportV1(BaseModel):
     schema_version: str = "runreport.v1"
     run_id: str
-    engine: Dict[str, Any]
+    engine: Dict[str, str]
     time: Dict[str, Any]
-    operator: Dict[str, Any]
+    operator: Dict[str, str]
     scope: Dict[str, Any]
     summary: RunReportSummaryV1
-    delta: Dict[str, Any]
+    
+    # La section errors pour le débogage
+    errors: List[ReportErrorV1] = Field(default_factory=list)
+    
+    delta: Optional[Dict[str, Any]] = None
     artifacts: RunReportArtifactsV1
-    signals: List[SignalV1] = Field(default_factory=list)
-    findings: List[FindingV1] = Field(default_factory=list)
+    signals: List[Any] = Field(default_factory=list)
+    findings: List[Any] = Field(default_factory=list)

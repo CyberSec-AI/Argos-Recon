@@ -3,56 +3,73 @@ import time
 import ssl
 import socket
 import ulid
-from urllib.parse import urlparse
-from app.schemas.types import TLSArtifactV1, TargetV1
+import asyncio
+import ipaddress
+from app.schemas.types import TLSArtifactV1, TargetV1, TimingsMs
 from app.core.config import TLS_TIMEOUT
 
-async def fetch_tls_facts(target: TargetV1) -> TLSArtifactV1:
-    """Récupère les infos TLS de base pour une TargetV1."""
-    
+def _is_ip_address(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+def _fetch_tls_sync(target: TargetV1) -> TLSArtifactV1:
     t0 = time.perf_counter()
     hostname = target.host
-    port = target.port if target.port else 443
+    
+    if target.ports and len(target.ports) > 0:
+        port = target.ports[0]
+    else:
+        port = 443
     
     artifact = TLSArtifactV1(
         tls_id=str(ulid.new()),
         target_id=target.target_id,
         observed_host=hostname,
         ip="",
-        port=port
+        port=port,
+        timings_ms=TimingsMs() # Init vide
     )
     
-    # Si IPs déjà résolues, on prend la première, sinon fallback host
     target_ip = target.resolved_ips[0] if target.resolved_ips else hostname
     artifact.ip = target_ip
+    
+    server_name = None if _is_ip_address(hostname) else hostname
+
+    raw_sock = None
+    conn = None
 
     try:
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         
-        conn = context.wrap_socket(
-            socket.socket(socket.AF_INET),
-            server_hostname=hostname,
-        )
-        conn.settimeout(TLS_TIMEOUT)
+        raw_sock = socket.create_connection((target_ip, port), timeout=TLS_TIMEOUT)
+        conn = context.wrap_socket(raw_sock, server_hostname=server_name)
         
-        try:
-            conn.connect((target_ip, port))
-            cert = conn.getpeercert(binary_form=True) # Non-verify returns empty dict if not binary
-            # Ici simplification pour l'exemple, récupération du cipher/version
-            cipher = conn.cipher()
+        cipher = conn.cipher()
+        if cipher:
             artifact.protocol = cipher[1]
             artifact.cipher = cipher[0]
-            
-            # Note: Pour le parsing complet X509 (CN, SAN, Expiry), 
-            # il faudrait utiliser cryptography.x509 ici. 
-            # Je garde l'exemple simple pour la structure.
-            
-        finally:
-            conn.close()
 
     except Exception as e:
         artifact.error = f"{type(e).__name__}: {str(e)}"
-
+    
+    finally:
+        if conn:
+            try: conn.close()
+            except: pass
+        elif raw_sock:
+            try: raw_sock.close()
+            except: pass
+    
+    # CORRECTION : Assignation objet
+    duration = int((time.perf_counter() - t0) * 1000)
+    artifact.timings_ms = TimingsMs(total=duration)
+    
     return artifact
+
+async def fetch_tls_facts(target: TargetV1) -> TLSArtifactV1:
+    return await asyncio.to_thread(_fetch_tls_sync, target)

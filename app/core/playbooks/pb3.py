@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from app.schemas.types import DNSArtifactV1, TargetV1
 from app.schemas.finding_v1 import FindingV1, FindingScoreV1, FindingTargetRefV1, FindingEvidenceRefV1
 
+# --- Helpers Globaux ---
+
 @dataclass
 class SPFAnalysis:
     present: bool
@@ -67,6 +69,8 @@ def analyze_dmarc(dmarc_txt: List[str]) -> DMARCAnalysis:
     if not p: warn = "Missing mandatory 'p=' policy."
     elif p.lower() == "none": warn = "Policy is p=none."
     return DMARCAnalysis(True, rec, tags, p.lower() if p else None, warn)
+
+# --- Fonction Principale ---
 
 def evaluate_pb3(dns: DNSArtifactV1, target: TargetV1) -> Optional[FindingV1]:
     if dns.error: return None

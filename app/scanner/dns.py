@@ -3,7 +3,7 @@ import time
 import asyncio
 import dns.resolver
 import ulid
-from app.schemas.types import DNSArtifactV1, TargetV1
+from app.schemas.types import DNSArtifactV1, TargetV1, TimingsMs
 from app.core.config import DNS_TIMEOUT
 
 def _fetch_dns_records_sync(target: TargetV1) -> DNSArtifactV1:
@@ -16,7 +16,8 @@ def _fetch_dns_records_sync(target: TargetV1) -> DNSArtifactV1:
     artifact = DNSArtifactV1(
         dns_id=str(ulid.new()),
         target_id=target.target_id,
-        domain=domain
+        domain=domain,
+        timings_ms=TimingsMs()
     )
 
     def safe_query_txt(name):
@@ -34,21 +35,17 @@ def _fetch_dns_records_sync(target: TargetV1) -> DNSArtifactV1:
             return None
 
     try:
-        # TXT (SPF)
         artifact.txt = safe_query_txt(domain)
-        
-        # DMARC (_dmarc.domain)
         artifact.dmarc = safe_query_txt(f"_dmarc.{domain}")
-        
-        # CNAME
         artifact.cname = safe_query_cname(domain)
-
-        # MX, A, etc... (tu peux ajouter les autres ici selon tes besoins)
 
     except Exception as e:
         artifact.error = f"dns_global_failure:{type(e).__name__}"
 
-    artifact.timings_ms = int((time.perf_counter() - t0) * 1000)
+    # CORRECTION : Assignation objet
+    duration = int((time.perf_counter() - t0) * 1000)
+    artifact.timings_ms = TimingsMs(total=duration)
+    
     return artifact
 
 async def collect_dns_async(target: TargetV1) -> DNSArtifactV1:
