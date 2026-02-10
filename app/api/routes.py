@@ -14,6 +14,7 @@ from app.core.signals import extract_signals
 from app.core.playbooks.pb1 import evaluate_pb1
 from app.core.playbooks.pb2 import evaluate_pb2
 from app.core.playbooks.pb3 import evaluate_pb3
+from app.core.playbooks.pb4 import evaluate_pb4 # IMPORT PB4
 from app.core.runreport import build_report
 
 router = APIRouter()
@@ -69,9 +70,12 @@ async def analyze(req: AnalyzeRequest):
         f2 = evaluate_pb2(signals, target, all_http_artifacts)
         if f2: findings.append(f2)
         
-        # PB3 : Email Security
         f3 = evaluate_pb3(dns_artifact, target)
         if f3: findings.append(f3)
+
+        # PB4 : Subdomain Takeover
+        f4 = evaluate_pb4(dns_artifact, target, all_http_artifacts)
+        if f4: findings.append(f4)
 
         finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         duration_ms = int((time.perf_counter() - started) * 1000)
@@ -96,5 +100,4 @@ async def analyze(req: AnalyzeRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        # CORRECTION : Syntaxe fermée correctement
         raise HTTPException(status_code=500, detail=f"Scan failed: {type(e).__name__}")
