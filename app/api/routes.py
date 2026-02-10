@@ -16,6 +16,7 @@ from app.core.playbooks.pb1 import evaluate_pb1
 from app.core.playbooks.pb2 import evaluate_pb2
 from app.core.playbooks.pb3 import evaluate_pb3
 from app.core.playbooks.pb4 import evaluate_pb4
+from app.core.playbooks.pb5_wordpress import evaluate_pb5
 from app.core.runreport import build_report
 
 router = APIRouter()
@@ -23,14 +24,20 @@ router = APIRouter()
 class AnalyzeRequest(BaseModel):
     url: str
 
+# LISTE OPTIMISÉE
 PROBE_LIST = [
     # API Recon
     "/swagger-ui.html", "/swagger-ui/", "/v2/api-docs", "/openapi.json",
     "/robots.txt", "/sitemap.xml",
-    # CMS Recon
+    
+    # CMS Recon & Attack Surface (Sources de PB5)
     "/wp-login.php",
     "/wp-json/",
     "/xmlrpc.php",
+    "/wp-json/wp/v2/users?per_page=100", # Probe spécifique User Enum
+    "/readme.html",
+    
+    # Autres CMS
     "/administrator/",
     "/user/login"
 ]
@@ -85,10 +92,15 @@ async def analyze(req: AnalyzeRequest):
         f4 = evaluate_pb4(dns_artifact, target, all_http_artifacts)
         if f4: findings.append(f4)
 
+        # PB5 : WordPress Specifics
+        f5_list = evaluate_pb5(cms_artifact, target, all_http_artifacts)
+        if f5_list:
+            findings.extend(f5_list)
+
         finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         duration_ms = int((time.perf_counter() - started) * 1000)
 
-        # 5. Reporting (Wiring Clean)
+        # 5. Reporting
         report = build_report(
             target_raw=target,
             tls_artifact=tls_artifact,
@@ -99,7 +111,7 @@ async def analyze(req: AnalyzeRequest):
             finished_at=finished_at,
             duration_ms=duration_ms,
             dns_artifact=dns_artifact,
-            cms_artifact=cms_artifact # <-- Passed natively
+            cms_artifact=cms_artifact 
         )
         
         return report.model_dump()

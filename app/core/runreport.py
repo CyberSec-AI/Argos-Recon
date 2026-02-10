@@ -11,7 +11,6 @@ from app.schemas.runreport_v1 import (
     RunReportSNR,
     FindingCountsV1
 )
-# AJOUT : Import CMSArtifactV1
 from app.schemas.types import TLSArtifactV1, HTTPRequestArtifactV1, SignalV1, DNSArtifactV1, CMSArtifactV1
 from app.schemas.finding_v1 import FindingV1
 
@@ -25,23 +24,33 @@ def build_report(
     finished_at: str,
     duration_ms: int,
     dns_artifact: Optional[DNSArtifactV1] = None,
-    # AJOUT : Argument natif optionnel
     cms_artifact: Optional[CMSArtifactV1] = None
 ) -> RunReportV1:
     
     run_id_val = str(ulid.new())
 
+    # 1. Calcul des comptes
     counts = {k: 0 for k in ["critical", "high", "medium", "low", "info"]}
     for f in findings:
         counts[f.severity] += 1
         
-    top_findings = [f.finding_id for f in findings if f.severity in ("critical", "high")]
+    # 2. Logique de Tri par Sévérité pour le Verdict
+    severity_order = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
     
-    verdict = "Clean"
-    if findings:
-        verdict = findings[0].title 
+    # On trie les findings : Sévérité décroissante, puis Score décroissant
+    sorted_findings = sorted(
+        findings, 
+        key=lambda f: (severity_order.get(f.severity, 0), f.score.total), 
+        reverse=True
+    )
+    
+    # Verdict basé sur le pire finding
+    verdict = sorted_findings[0].title if sorted_findings else "Clean"
 
-    # AJOUT : Mapping propre dans la section artifacts
+    # 3. Top Findings : On prend les titres des plus graves (Critical/High)
+    top_findings = [f.title for f in sorted_findings if f.severity in ("critical", "high")]
+    
+    # Artifacts Section
     artifacts_section = RunReportArtifactsV1(
         requests=http_artifacts,
         tls=[tls_artifact] if tls_artifact.ip else [],
