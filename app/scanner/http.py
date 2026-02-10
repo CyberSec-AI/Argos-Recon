@@ -1,138 +1,64 @@
 from __future__ import annotations
-
-import asyncio
-import base64
-import hashlib
 import time
-from urllib.parse import urlparse
-
 import httpx
 import ulid
+import asyncio
+from typing import List
+from app.schemas.types import HTTPRequestArtifactV1, TargetV1
+from app.core.config import HTTP_TIMEOUT_TOTAL
 
-from app.schemas.types import HTTPRequestArtifactV1, TimingsMs
+# Sémaphore global pour limiter la concurrence HTTP
+http_sem = asyncio.Semaphore(10)
 
-
-def _b64(b: bytes) -> str:
-    return base64.b64encode(b).decode("ascii")
-
-
-async def _perform_request(client: httpx.AsyncClient, target: dict, path: str, response_raw_max_bytes: int, tags: list[str]) -> HTTPRequestArtifactV1:
-    parsed = urlparse(target["canonical_url"])
-    scheme = parsed.scheme or "https"
-    host = parsed.hostname or target["host"]
-    
-    ips = target.get("resolved_ips") or []
-    ip = ips[0] if ips else ""
-    
-    if target.get("ports") and len(target["ports"]) > 0:
-        port = target["ports"][0]
-    else:
-        port = 443 if scheme == "https" else 80
-
-    use_tls = (scheme == "https")
-    
-    base_url = target["canonical_url"].rstrip("/")
-    full_url = f"{base_url}{path}"
-    
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    accept = "text/html,application/json,application/xml;q=0.9,*/*;q=0.8"
-    lang = "en-US,en;q=0.9"
-    
-    headers = { 
-        "User-Agent": ua, 
-        "Accept": accept, 
-        "Accept-Language": lang,
-        "Connection": "close" 
-    }
-
-    raw_req_display = (
-        f"GET {path} HTTP/1.1\r\n"
-        f"Host: {host}\r\n"
-        f"User-Agent: {ua}\r\n"
-        f"Accept: {accept}\r\n"
-        f"Accept-Language: {lang}\r\n"
-        f"Connection: close\r\n"
-        f"\r\n"
-    ).encode()
-
+async def _fetch_single(target: TargetV1, path: str, max_bytes: int) -> HTTPRequestArtifactV1:
+    url = f"{target.canonical_url.rstrip('/')}{path}"
     t0 = time.perf_counter()
-    body_buffer = bytearray()
-    snippet_text = ""
-    status_code = None
-    error_msg = None
-    res_headers = {}
-    response_truncated = False
-    effective_url = full_url
-    protocol_version = "HTTP/1.1"
     
-    try:
-        async with client.stream("GET", full_url, headers=headers) as r:
-            status_code = r.status_code
-            res_headers = {k.lower(): str(v) for k, v in r.headers.items()}
-            effective_url = str(r.url)
-            protocol_version = getattr(r, "http_version", None) or "HTTP/1.1"
-            
-            limit_soft = 32 * 1024 
-            limit_hard = response_raw_max_bytes
-            
-            async for chunk in r.aiter_bytes():
-                body_buffer.extend(chunk)
-                if len(body_buffer) > limit_hard:
-                    response_truncated = True
-                    del body_buffer[limit_hard:]
-                    break
-            
-            encoding = r.encoding or "utf-8"
-            try:
-                snippet_text = body_buffer[:limit_soft].decode(encoding, errors="replace")
-            except:
-                snippet_text = ""
-
-    except httpx.TimeoutException:
-        error_msg = "timeout"
-    except httpx.ConnectError:
-        error_msg = "connection_refused"
-    except httpx.RequestError as e:
-        error_msg = f"network_error:{type(e).__name__}"
-    except Exception as e:
-        error_msg = f"internal_error:{type(e).__name__}"
-        
-    t1 = time.perf_counter()
-    total_ms = int((t1 - t0) * 1000)
-
-    response_content = bytes(body_buffer)
-    response_hash = f"sha256:{hashlib.sha256(response_content).hexdigest()}" if response_content else None
-    response_raw = _b64(response_content) if response_content else None
-
-    return HTTPRequestArtifactV1(
-        request_id=str(ulid.new()), target_id=target["target_id"],
-        url=full_url, effective_url=effective_url,
-        host=host, ip=ip, port=port, tls=use_tls,
-        method="GET", protocol=protocol_version,
-        raw=_b64(raw_req_display), raw_encoding="base64",
-        response_raw=response_raw, response_raw_encoding="base64" if response_raw else None,
-        response_truncated=response_truncated, response_hash=response_hash,
-        response_analysis_snippet=snippet_text,
-        
-        status_code=status_code,
-        error=error_msg,
-        
-        headers=res_headers, timings_ms=TimingsMs(total=total_ms), tags=tags
+    req_art = HTTPRequestArtifactV1(
+        request_id=str(ulid.new()),
+        target_id=target.target_id,
+        url=url,
+        effective_url=url,
+        host=target.host,
+        ip=target.resolved_ips[0] if target.resolved_ips else "",
+        port=target.port or (443 if target.scheme == "https" else 80),
+        tls=(target.scheme == "https"),
+        method="GET",
+        raw=""
     )
 
+    async with http_sem:
+        try:
+            async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=HTTP_TIMEOUT_TOTAL) as client:
+                resp = await client.get(url)
+                
+                req_art.status_code = resp.status_code
+                req_art.effective_url = str(resp.url)
+                # Conversion headers (multidict -> dict)
+                req_art.headers = dict(resp.headers)
+                
+                # Gestion Body safe
+                content = resp.content
+                if len(content) > max_bytes:
+                    req_art.response_truncated = True
+                    content = content[:max_bytes]
+                
+                # Snippet (premiers 2048 chars)
+                try:
+                    text_sample = content.decode("utf-8", errors="replace")
+                    req_art.response_analysis_snippet = text_sample[:2048]
+                except:
+                    pass
 
-async def fetch_http_baseline(target: dict, response_raw_max_bytes: int = 262144) -> HTTPRequestArtifactV1:
-    async with httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(8.0), verify=False) as client:
-        return await _perform_request(client, target, "/", response_raw_max_bytes, ["baseline", "headers"])
+        except Exception as e:
+            req_art.error = str(e)
 
+    req_art.timings_ms.total = int((time.perf_counter() - t0) * 1000)
+    return req_art
 
-async def probe_paths(target: dict, paths: list[str], response_raw_max_bytes: int = 262144) -> list[HTTPRequestArtifactV1]:
-    sem = asyncio.Semaphore(10)
-    async def limited_probe(client, p):
-        async with sem:
-            path = p if p.startswith("/") else f"/{p}"
-            return await _perform_request(client, target, path, response_raw_max_bytes, ["probe", "api_recon"])
+async def fetch_http_baseline(target: TargetV1, response_raw_max_bytes: int) -> HTTPRequestArtifactV1:
+    return await _fetch_single(target, "/", response_raw_max_bytes)
 
-    async with httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(5.0), verify=False) as client:
-        tasks = [limited_probe(client, path) for path in paths]
-        return await asyncio.gather(*tasks)
+async def probe_paths(target: TargetV1, paths: List[str], response_raw_max_bytes: int) -> List[HTTPRequestArtifactV1]:
+    tasks = [_fetch_single(target, p, response_raw_max_bytes) for p in paths]
+    return await asyncio.gather(*tasks)

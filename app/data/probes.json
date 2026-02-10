@@ -1,0 +1,11 @@
+[
+    "/robots.txt",
+    "/sitemap.xml",
+    "/wp-login.php",
+    "/xmlrpc.php",
+    "/wp-json/wp/v2/users?per_page=100",
+    "/readme.html",
+    "/swagger-ui.html",
+    "/v2/api-docs",
+    "/administrator/"
+  ]

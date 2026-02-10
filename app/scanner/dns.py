@@ -1,85 +1,55 @@
 from __future__ import annotations
-
 import time
+import asyncio
 import dns.resolver
-# SUPPRIMÉ : import dns.exception (inutile)
 import ulid
+from app.schemas.types import DNSArtifactV1, TargetV1
+from app.core.config import DNS_TIMEOUT
 
-from app.schemas.types import DNSArtifactV1
-
-def fetch_dns_records(target: dict) -> DNSArtifactV1:
-    """
-    Récupère les enregistrements DNS (Sync).
-    À exécuter via asyncio.to_thread().
-    """
-    domain = target["host"]
+def _fetch_dns_records_sync(target: TargetV1) -> DNSArtifactV1:
+    domain = target.host
     t0 = time.perf_counter()
-    
     resolver = dns.resolver.Resolver()
-    resolver.timeout = 2.0
-    resolver.lifetime = 2.0
+    resolver.timeout = DNS_TIMEOUT
+    resolver.lifetime = DNS_TIMEOUT
     
     artifact = DNSArtifactV1(
         dns_id=str(ulid.new()),
-        target_id=target["target_id"],
+        target_id=target.target_id,
         domain=domain
     )
 
-    # Helper interne
-    def safe_query_name(name: str, qtype: str) -> list[str]:
+    def safe_query_txt(name):
         try:
-            answers = resolver.resolve(name, qtype)
-            results = []
-            for r in answers:
-                if qtype == "TXT":
-                    if hasattr(r, 'strings'):
-                        txt_val = b"".join(r.strings).decode("utf-8", errors="replace")
-                        results.append(txt_val)
-                    else:
-                        results.append(r.to_text().strip('"'))
-                else:
-                    results.append(r.to_text())
-            return results
-        
-        # Cas "Normal" : Le domaine existe mais pas ce record
-        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.YXDOMAIN):
-            return []
-        
-        # Cas "Erreur Technique" : Timeout ou Serveur cassé
-        # CORRECTION : On signale l'erreur pour éviter que PB3 croie que c'est vide
-        except (dns.resolver.Timeout, dns.resolver.NoNameservers) as e:
-            if not artifact.error:
-                artifact.error = f"dns_error:{type(e).__name__}"
-            return []
-            
-        except Exception as e:
-            if not artifact.error:
-                artifact.error = f"dns_unexpected:{type(e).__name__}"
+            answers = resolver.resolve(name, 'TXT')
+            return [r.to_text().strip('"') for r in answers]
+        except Exception:
             return []
 
-    # Wrapper
-    def safe_query(qtype: str) -> list[str]:
-        return safe_query_name(domain, qtype)
+    def safe_query_cname(name):
+        try:
+            answers = resolver.resolve(name, 'CNAME')
+            return str(answers[0].target).rstrip('.')
+        except Exception:
+            return None
 
     try:
-        artifact.a = safe_query('A')
-        artifact.aaaa = safe_query('AAAA')
-        artifact.mx = safe_query('MX')
-        artifact.ns = safe_query('NS')
-        artifact.txt = safe_query('TXT')
+        # TXT (SPF)
+        artifact.txt = safe_query_txt(domain)
         
-        artifact.dmarc = safe_query_name(f"_dmarc.{domain}", "TXT")
+        # DMARC (_dmarc.domain)
+        artifact.dmarc = safe_query_txt(f"_dmarc.{domain}")
         
-        soa = safe_query('SOA')
-        if soa: artifact.soa = soa[0]
-        
-        cname = safe_query('CNAME')
-        if cname: artifact.cname = cname[0]
+        # CNAME
+        artifact.cname = safe_query_cname(domain)
+
+        # MX, A, etc... (tu peux ajouter les autres ici selon tes besoins)
 
     except Exception as e:
         artifact.error = f"dns_global_failure:{type(e).__name__}"
 
-    duration_ms = int((time.perf_counter() - t0) * 1000)
-    artifact.timings_ms = duration_ms
-
+    artifact.timings_ms = int((time.perf_counter() - t0) * 1000)
     return artifact
+
+async def collect_dns_async(target: TargetV1) -> DNSArtifactV1:
+    return await asyncio.to_thread(_fetch_dns_records_sync, target)
