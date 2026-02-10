@@ -175,30 +175,46 @@ Choix d’architecture intentionnels :
 
 ## Prochaines étapes envisagées (Roadmap)
 
-### 1) Robustesse réseau et “low noise”
-- Rate-limit adaptatif (backoff, jitter, retry policy)
-- Gestion explicite 429/503 (cooldown, réduction de concurrence)
-- Budget dynamique par cible (éviter ban IP / WAF noise)
+### Phase 1 – Robustesse & fiabilité (v0.3.x)
+Gestion avancée des erreurs réseau (timeouts, retries, backoff progressif).
+Prise en charge explicite des réponses 429 et 503 (réduction automatique de la charge).
+Budget de requêtes dynamique par cible afin de limiter l’impact sur les services analysés.
+Mode Reconnaissance passive (DNS, certificats, métadonnées publiques) sans requêtes HTTP actives.
+Journalisation détaillée des erreurs et décisions du moteur.
 
-### 2) Couverture fonctionnelle (playbooks)
-- Détection OpenAPI/Swagger (UI + spec)
-- Détection surfaces d’auth (login/admin) + posture de headers approfondie
-- TLS posture avancée (versions, suites faibles, HSTS, OCSP stapling selon faisabilité)
+### Phase 2 – Couverture fonctionnelle (Playbooks)
+Détection automatique des interfaces OpenAPI / Swagger et extraction des routes exposées.
+Identification des surfaces d’authentification (login, admin, portails sensibles).
+Analyse avancée de la posture TLS (versions supportées, suites faibles, HSTS).
+Détection de WAF et reverse-proxy courants (Cloudflare, AWS WAF, Akamai, etc.).
+Recherche de fichiers sensibles exposés (.env, backups, archives, fichiers de configuration).
+Détection de technologies Web et frameworks côté client (approche similaire à Wappalyzer).
+Détection des risques de subdomain takeover (CNAME orphelins).
 
-### 3) Packaging et distribution
-- CLI unifié (`argos.exe` via PyInstaller) + fichier de config
-- Export multi-formats (JSON + Markdown)
-- Changelog + versioning sémantique
+### Phase 3 – Packaging & distribution
+Interface CLI unifiée (binaire standalone).
+Export des rapports en plusieurs formats : JSON, Markdown, CSV et HTML.
+Versioning sémantique et changelog structuré.
+Image Docker officielle pour exécution isolée.
+Système de plugins permettant d’étendre les playbooks sans modifier le cœur.
 
-### 4) Qualité et CI/CD
-- GitHub Actions (lint + tests)
-- Pre-commit (ruff + black)
-- Couverture minimale & seuil de non-régression
+### Phase 4 – Qualité & automatisation
+Pipeline CI/CD avec linting, tests unitaires et tests d’intégration.
+Vérifications automatiques de sécurité du code (analyse statique).
+Surveillance des dépendances et alertes de vulnérabilités.
+Tests de performance et de montée en charge.
 
-### 5) UX / Frontend
-- Historique des scans, comparaison de runs, export
-- Vue findings orientée “pourquoi / impact / recommandation”
+### Phase 5 – Interface & expérience utilisateur
+Historique des scans et comparaison entre exécutions.
+Vue “findings” orientée impact et recommandations.
+Suivi de progression des scans en temps réel.
+Système de gestion des faux positifs.
 
+### Phase 6 – Intégrations
+
+Webhooks (Slack, Teams, Discord).
+Création automatique de tickets (Jira, GitLab).
+Stockage externe des rapports (S3 compatible).
 ---
 
 ## Licence
