@@ -77,7 +77,6 @@ class HTTPRequestArtifactV1(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
 
-# --- LA CLASSE MANQUANTE EST ICI ---
 class DNSArtifactV1(BaseModel):
     dns_id: str
     target_id: str
@@ -89,6 +88,9 @@ class DNSArtifactV1(BaseModel):
     mx: List[str] = Field(default_factory=list)
     ns: List[str] = Field(default_factory=list)
     txt: List[str] = Field(default_factory=list)
+    
+    # NOUVEAU : DMARC spécifique (_dmarc.<domain>)
+    dmarc: List[str] = Field(default_factory=list)
     
     soa: Optional[str] = None
     cname: Optional[str] = None

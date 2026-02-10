@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import dns.resolver
-import dns.exception
+# SUPPRIMÉ : import dns.exception (inutile)
 import ulid
 
 from app.schemas.types import DNSArtifactV1
@@ -25,29 +25,41 @@ def fetch_dns_records(target: dict) -> DNSArtifactV1:
         domain=domain
     )
 
-    def safe_query(qtype: str) -> list[str]:
+    # Helper interne
+    def safe_query_name(name: str, qtype: str) -> list[str]:
         try:
-            answers = resolver.resolve(domain, qtype)
+            answers = resolver.resolve(name, qtype)
             results = []
             for r in answers:
                 if qtype == "TXT":
-                    # Gestion propre du multi-string TXT
                     if hasattr(r, 'strings'):
                         txt_val = b"".join(r.strings).decode("utf-8", errors="replace")
                         results.append(txt_val)
                     else:
                         results.append(r.to_text().strip('"'))
                 else:
-                    # Pas de rstrip('.') pour garder le standard FQDN
                     results.append(r.to_text())
             return results
+        
+        # Cas "Normal" : Le domaine existe mais pas ce record
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.YXDOMAIN):
+            return []
+        
+        # Cas "Erreur Technique" : Timeout ou Serveur cassé
+        # CORRECTION : On signale l'erreur pour éviter que PB3 croie que c'est vide
+        except (dns.resolver.Timeout, dns.resolver.NoNameservers) as e:
+            if not artifact.error:
+                artifact.error = f"dns_error:{type(e).__name__}"
+            return []
+            
+        except Exception as e:
+            if not artifact.error:
+                artifact.error = f"dns_unexpected:{type(e).__name__}"
+            return []
 
-        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
-            return []
-        except (dns.resolver.Timeout, dns.resolver.NoNameservers):
-            return []
-        except Exception:
-            return []
+    # Wrapper
+    def safe_query(qtype: str) -> list[str]:
+        return safe_query_name(domain, qtype)
 
     try:
         artifact.a = safe_query('A')
@@ -55,6 +67,8 @@ def fetch_dns_records(target: dict) -> DNSArtifactV1:
         artifact.mx = safe_query('MX')
         artifact.ns = safe_query('NS')
         artifact.txt = safe_query('TXT')
+        
+        artifact.dmarc = safe_query_name(f"_dmarc.{domain}", "TXT")
         
         soa = safe_query('SOA')
         if soa: artifact.soa = soa[0]
