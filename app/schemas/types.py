@@ -69,13 +69,32 @@ class HTTPRequestArtifactV1(BaseModel):
     
     response_analysis_snippet: Optional[str] = None
 
-    # V3.3 : Status optionnel et Error explicite
     status_code: Optional[int] = None
     error: Optional[str] = None
 
     headers: Dict[str, str] = Field(default_factory=dict)
     timings_ms: TimingsMs = Field(default_factory=TimingsMs)
     tags: List[str] = Field(default_factory=list)
+
+
+# --- LA CLASSE MANQUANTE EST ICI ---
+class DNSArtifactV1(BaseModel):
+    dns_id: str
+    target_id: str
+    domain: str
+    
+    # Enregistrements
+    a: List[str] = Field(default_factory=list)
+    aaaa: List[str] = Field(default_factory=list)
+    mx: List[str] = Field(default_factory=list)
+    ns: List[str] = Field(default_factory=list)
+    txt: List[str] = Field(default_factory=list)
+    
+    soa: Optional[str] = None
+    cname: Optional[str] = None
+    
+    timings_ms: int = 0
+    error: Optional[str] = None
 
 
 class SignalV1(BaseModel):
