@@ -1,10 +1,14 @@
 from __future__ import annotations
-import time
+
 import asyncio
+import time
+
 import dns.resolver
 import ulid
-from app.schemas.types import DNSArtifactV1, TargetV1, TimingsMs
+
 from app.core.config import DNS_TIMEOUT
+from app.schemas.types import DNSArtifactV1, TargetV1, TimingsMs
+
 
 def _fetch_dns_records_sync(target: TargetV1) -> DNSArtifactV1:
     domain = target.host
@@ -12,25 +16,25 @@ def _fetch_dns_records_sync(target: TargetV1) -> DNSArtifactV1:
     resolver = dns.resolver.Resolver()
     resolver.timeout = DNS_TIMEOUT
     resolver.lifetime = DNS_TIMEOUT
-    
+
     artifact = DNSArtifactV1(
         dns_id=str(ulid.new()),
         target_id=target.target_id,
         domain=domain,
-        timings_ms=TimingsMs()
+        timings_ms=TimingsMs(),
     )
 
     def safe_query_txt(name):
         try:
-            answers = resolver.resolve(name, 'TXT')
+            answers = resolver.resolve(name, "TXT")
             return [r.to_text().strip('"') for r in answers]
         except Exception:
             return []
 
     def safe_query_cname(name):
         try:
-            answers = resolver.resolve(name, 'CNAME')
-            return str(answers[0].target).rstrip('.')
+            answers = resolver.resolve(name, "CNAME")
+            return str(answers[0].target).rstrip(".")
         except Exception:
             return None
 
@@ -45,8 +49,9 @@ def _fetch_dns_records_sync(target: TargetV1) -> DNSArtifactV1:
     # CORRECTION : Assignation objet
     duration = int((time.perf_counter() - t0) * 1000)
     artifact.timings_ms = TimingsMs(total=duration)
-    
+
     return artifact
+
 
 async def collect_dns_async(target: TargetV1) -> DNSArtifactV1:
     return await asyncio.to_thread(_fetch_dns_records_sync, target)

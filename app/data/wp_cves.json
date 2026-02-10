@@ -1,0 +1,9 @@
+[
+    {
+      "id": "CVE-TEST-001",
+      "title": "Test Vulnerability",
+      "affected_versions": { "operator": "<", "version": "99.9" },
+      "severity": "info",
+      "description": "Just a test."
+    }
+  ]

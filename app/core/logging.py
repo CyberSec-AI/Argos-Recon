@@ -1,6 +1,7 @@
 import logging
 import sys
 
+
 def setup_logging(level: str = "INFO"):
     """Configure le logging global. force=True garantit l'application."""
     numeric_level = getattr(logging, level.upper(), None)
@@ -11,11 +12,9 @@ def setup_logging(level: str = "INFO"):
         level=numeric_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ],
-        force=True
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,
     )
-    
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

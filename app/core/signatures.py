@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple
+
 
 @dataclass(frozen=True)
 class TakeoverSignature:
@@ -8,6 +10,7 @@ class TakeoverSignature:
     cname_suffixes: Tuple[str, ...]
     body_markers: Tuple[str, ...]
     status_codes: Tuple[int, ...] = (404,)
+
 
 TAKEOVER_SIGNATURES: Tuple[TakeoverSignature, ...] = (
     TakeoverSignature(
@@ -26,8 +29,8 @@ TAKEOVER_SIGNATURES: Tuple[TakeoverSignature, ...] = (
     TakeoverSignature(
         service="AWS S3 (Website)",
         cname_suffixes=(
-            ".s3-website-", 
-            ".s3-website.", 
+            ".s3-website-",
+            ".s3-website.",
             # On retire .amazonaws.com pour éviter les FP sur ELB/CloudFront/EC2
         ),
         body_markers=("the specified bucket does not exist", "no such bucket"),
@@ -36,19 +39,27 @@ TAKEOVER_SIGNATURES: Tuple[TakeoverSignature, ...] = (
     TakeoverSignature(
         service="Azure (Web App / Front Door)",
         cname_suffixes=(".azurewebsites.net", ".trafficmanager.net", ".azurefd.net"),
-        body_markers=("404 web site not found", "the resource you are looking for has been removed"),
+        body_markers=(
+            "404 web site not found",
+            "the resource you are looking for has been removed",
+        ),
         status_codes=(404,),
     ),
     TakeoverSignature(
         service="Pantheon",
         cname_suffixes=(".pantheonsite.io",),
-        body_markers=("the gods are wise", "but do not know of the site which you seek"),
+        body_markers=(
+            "the gods are wise",
+            "but do not know of the site which you seek",
+        ),
         status_codes=(404,),
     ),
     TakeoverSignature(
         service="Tumblr",
         cname_suffixes=(".tumblr.com",),
-        body_markers=("whatever you were looking for doesn't currently exist at this address",),
+        body_markers=(
+            "whatever you were looking for doesn't currently exist at this address",
+        ),
         status_codes=(404,),
     ),
     TakeoverSignature(
@@ -65,22 +76,24 @@ TAKEOVER_SIGNATURES: Tuple[TakeoverSignature, ...] = (
     ),
 )
 
+
 def match_takeover_signature(cname: str) -> Optional[TakeoverSignature]:
     if not cname:
         return None
-    
+
     # Normalisation du CNAME candidat
-    c = cname.strip().lower().rstrip(".") 
-    
+    c = cname.strip().lower().rstrip(".")
+
     for sig in TAKEOVER_SIGNATURES:
         for suf in sig.cname_suffixes:
             # Normalisation du suffixe de référence
             s = suf.lower().strip(".")
-            
+
             # Matching strict de frontière DNS
             if c == s or c.endswith("." + s):
                 return sig
     return None
+
 
 def body_contains_marker(body: str, markers: Iterable[str]) -> bool:
     b = (body or "").lower()

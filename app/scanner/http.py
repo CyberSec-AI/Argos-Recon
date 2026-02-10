@@ -1,38 +1,41 @@
 from __future__ import annotations
+
+import asyncio
 import time
+from typing import List, Optional
+from urllib.parse import urlparse
+
 import httpx
 import ulid
-import asyncio
-from typing import List
-from urllib.parse import urlparse
-from app.schemas.types import HTTPRequestArtifactV1, TargetV1, TimingsMs
-from app.core.config import HTTP_TIMEOUT_TOTAL
 
-http_sem = asyncio.Semaphore(10)
+from app.schemas.types import HTTPRequestArtifactV1, TargetV1, TimingsMs
+
 
 def _build_url(target: TargetV1, path: str) -> str:
-    base = target.canonical_url.rstrip('/')
+    base = target.canonical_url.rstrip("/")
     if not base:
         scheme = target.scheme or "https"
         base = f"{scheme}://{target.host}"
     clean_path = path if path.startswith("/") else f"/{path}"
     return f"{base}{clean_path}"
 
-async def _fetch_single(target: TargetV1, path: str, max_bytes: int) -> HTTPRequestArtifactV1:
+
+async def _fetch_single(
+    target: TargetV1,
+    path: str,
+    max_bytes: int,
+    client: httpx.AsyncClient,
+    semaphore: Optional[asyncio.Semaphore] = None,
+) -> HTTPRequestArtifactV1:
+
     url = _build_url(target, path)
     t0 = time.perf_counter()
-    
+
     parsed = urlparse(url)
-    scheme = parsed.scheme.lower()
-    is_tls = (scheme == "https")
-    
-    if parsed.port:
-        real_port = parsed.port
-    else:
-        real_port = 443 if is_tls else 80
-        
+    is_tls = parsed.scheme.lower() == "https"
     real_host = parsed.hostname or target.host
-    
+    real_port = parsed.port if parsed.port else (443 if is_tls else 80)
+
     req_art = HTTPRequestArtifactV1(
         request_id=str(ulid.new()),
         target_id=target.target_id,
@@ -44,70 +47,88 @@ async def _fetch_single(target: TargetV1, path: str, max_bytes: int) -> HTTPRequ
         tls=is_tls,
         method="GET",
         raw="",
-        timings_ms=TimingsMs()
+        timings_ms=TimingsMs(),
     )
 
-    async with http_sem:
+    async def _execute_request():
         try:
-            async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=HTTP_TIMEOUT_TOTAL) as client:
-                resp = await client.get(url)
-                
-                req_art.status_code = resp.status_code
-                req_art.effective_url = str(resp.url)
-                req_art.headers = dict(resp.headers)
-                
-                content = resp.content
-                if len(content) > max_bytes:
-                    req_art.response_truncated = True
-                    content = content[:max_bytes]
-                
-                try:
-                    text_sample = content.decode("utf-8", errors="replace")
-                    req_art.response_analysis_snippet = text_sample[:2048]
-                except:
-                    pass
+            # STREAMING STRICT O(n)
+            async with client.stream("GET", url) as response:
+                req_art.status_code = response.status_code
+                req_art.effective_url = str(response.url)
+                req_art.headers = dict(response.headers)
 
+                buffer = bytearray()
+                truncated = False
+
+                async for chunk in response.aiter_bytes():
+                    remaining = max_bytes - len(buffer)
+                    if remaining <= 0:
+                        truncated = True
+                        break
+
+                    chunk_to_add = chunk[:remaining]
+                    buffer.extend(chunk_to_add)
+
+                    if len(chunk) > remaining:
+                        truncated = True
+                        break
+
+                req_art.response_truncated = truncated
+                final_bytes = bytes(buffer)
+
+                try:
+                    text_sample = final_bytes.decode("utf-8", errors="replace")
+                    req_art.response_analysis_snippet = text_sample[:2048]
+                except Exception:
+                    pass
         except Exception as e:
             req_art.error = str(e)
 
-    # CORRECTION : Assignation objet
+    if semaphore:
+        async with semaphore:
+            await _execute_request()
+    else:
+        await _execute_request()
+
     duration = int((time.perf_counter() - t0) * 1000)
     req_art.timings_ms = TimingsMs(total=duration)
-    
     return req_art
 
-async def fetch_http_baseline(target: TargetV1, response_raw_max_bytes: int) -> HTTPRequestArtifactV1:
-    return await _fetch_single(target, "/", response_raw_max_bytes)
 
-async def probe_paths(target: TargetV1, paths: List[str], response_raw_max_bytes: int) -> List[HTTPRequestArtifactV1]:
-    tasks = [_fetch_single(target, p, response_raw_max_bytes) for p in paths]
+async def fetch_http_baseline(
+    target: TargetV1, response_raw_max_bytes: int, client: httpx.AsyncClient
+) -> HTTPRequestArtifactV1:
+    return await _fetch_single(target, "/", response_raw_max_bytes, client)
+
+
+async def probe_paths(
+    target: TargetV1,
+    paths: List[str],
+    response_raw_max_bytes: int,
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
+) -> List[HTTPRequestArtifactV1]:
+
+    tasks = [
+        _fetch_single(target, p, response_raw_max_bytes, client, semaphore)
+        for p in paths
+    ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     final_artifacts = []
     for i, res in enumerate(results):
         if isinstance(res, Exception):
             url_attempt = _build_url(target, paths[i])
-            parsed = urlparse(url_attempt)
-            is_tls = (parsed.scheme == "https")
-            real_port = parsed.port or (443 if is_tls else 80)
-            real_host = parsed.hostname or target.host
-
             err_art = HTTPRequestArtifactV1(
                 request_id=str(ulid.new()),
                 target_id=target.target_id,
                 url=url_attempt,
-                effective_url=url_attempt,
-                host=real_host,
-                port=real_port,
-                tls=is_tls,
                 method="GET",
                 error=f"Probe crash: {str(res)}",
-                # CORRECTION : Assignation objet
                 timings_ms=TimingsMs(total=0),
-                ip=""
             )
             final_artifacts.append(err_art)
         else:
             final_artifacts.append(res)
-            
     return final_artifacts

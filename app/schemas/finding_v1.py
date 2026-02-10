@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from typing import List, Optional, Literal, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
-from app.schemas.types import Severity, Confidence
+
+from app.schemas.types import Confidence, Severity
 
 
-class FindingScoreV1(BaseModel):
-    total: int
-    threshold: int
-    model: str = "points.v1"
-
-
+# Références
 class FindingTargetRefV1(BaseModel):
     target_id: str
     input: str
@@ -21,29 +18,21 @@ class FindingEvidenceRefV1(BaseModel):
     evidence_id: str
     type: str
     ref: Dict[str, Any]
-    snippet: str
+    snippet: Optional[str] = None
 
 
 class FindingSignalRefV1(BaseModel):
     signal_id: str
-    value: bool
-    evidence_refs: List[str] = Field(default_factory=list)
-    artifact_ref: Optional[str] = None
+    description: Optional[str] = None
 
 
-class BurpNextActionV1(BaseModel):
-    type: str
-    title: str
-    suggested_paths: List[str] = Field(default_factory=list)
-    caution: Optional[str] = None
+class FindingScoreV1(BaseModel):
+    total: int
+    threshold: int = 1
+    model: str = "risk_v1"
 
 
-class BurpArtifactsV1(BaseModel):
-    urls: List[str] = Field(default_factory=list)
-    requests: List[str] = Field(default_factory=list)  # request_ids
-    next_actions: List[BurpNextActionV1] = Field(default_factory=list)
-
-
+# Modèle Principal
 class FindingV1(BaseModel):
     schema_version: str = "finding.v1"
     finding_id: str
@@ -53,11 +42,8 @@ class FindingV1(BaseModel):
     severity: Severity
     confidence: Confidence
     score: FindingScoreV1
-
     target: FindingTargetRefV1
-    reasoning: Dict[str, Any] = Field(default_factory=dict)
-
+    reasoning: Dict[str, str]
     signals: List[FindingSignalRefV1] = Field(default_factory=list)
     evidence: List[FindingEvidenceRefV1] = Field(default_factory=list)
-
-    burp_artifacts: BurpArtifactsV1 = Field(default_factory=BurpArtifactsV1)
+    burp_artifacts: Dict[str, Any] = Field(default_factory=dict)

@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
-import asyncio
-from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
 import ulid
 
-
-NONPROD_KEYWORDS = ("dev", "staging", "stage", "test", "qa", "uat", "preprod", "nonprod", "internal", "local")
+NONPROD_KEYWORDS = (
+    "dev",
+    "staging",
+    "stage",
+    "test",
+    "qa",
+    "uat",
+    "preprod",
+    "nonprod",
+    "internal",
+    "local",
+)
 
 
 def _canonicalize_url(input_url: str) -> str:
@@ -33,7 +42,9 @@ def _canonicalize_url(input_url: str) -> str:
 
     # remove default ports
     netloc = host
-    if port and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
+    if port and not (
+        (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
+    ):
         netloc = f"{host}:{port}"
 
     path = p.path or "/"
@@ -100,5 +111,5 @@ async def normalize_target(input_url: str) -> dict:
         "resolved_ips": ips,
         "ports": [port],
         "scheme": scheme,
-        "port": port
+        "port": port,
     }

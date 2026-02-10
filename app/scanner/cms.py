@@ -1,15 +1,19 @@
 from __future__ import annotations
+
 import time
+from typing import Any, Dict, List, Optional
+
 import ulid
-from typing import List, Dict, Any, Optional
-from app.schemas.types import CMSArtifactV1, HTTPRequestArtifactV1, TargetV1
+
+from app.schemas.types import CMSArtifactV1, HTTPRequestArtifactV1, TargetV1, TimingsMs
+
 
 def detect_cms(
-    target: TargetV1, 
+    target: TargetV1,
     http_artifacts: List[HTTPRequestArtifactV1],
-    rules: Optional[List[Dict[str, Any]]] = None
+    rules: Optional[List[Dict[str, Any]]] = None,
 ) -> CMSArtifactV1:
-    
+
     t0 = time.perf_counter()
     artifact = CMSArtifactV1(
         cms_id=str(ulid.new()),
@@ -17,16 +21,19 @@ def detect_cms(
         detected_cms="unknown",
         confidence="low",
     )
-    
+
     if not rules:
         rules = [
-            {"name": "wordpress", "indicators": [
-                {"type": "endpoint", "path": "/wp-login.php", "score": 3},
-                {"type": "meta", "content": "wordpress", "score": 3},
-                {"type": "body", "content": "/wp-content/", "score": 1}
-            ]}
+            {
+                "name": "wordpress",
+                "indicators": [
+                    {"type": "endpoint", "path": "/wp-login.php", "score": 3},
+                    {"type": "meta", "content": "wordpress", "score": 3},
+                    {"type": "body", "content": "/wp-content/", "score": 1},
+                ],
+            }
         ]
-    
+
     scores: Dict[str, int] = {}
     evidence_set = set()
 
@@ -34,19 +41,20 @@ def detect_cms(
         body = (req.response_analysis_snippet or "").lower()
         url = (req.url or "").lower()
         status = req.status_code or 0
-        
+
         for rule in rules:
             cms_name = str(rule.get("name", "unknown"))
             indicators = rule.get("indicators")
-            
-            # Runtime guard
+
             if not isinstance(indicators, list):
                 continue
-            
-            if cms_name not in scores: scores[cms_name] = 0
-            
+
+            if cms_name not in scores:
+                scores[cms_name] = 0
+
             for ind in indicators:
-                if not isinstance(ind, dict): continue
+                if not isinstance(ind, dict):
+                    continue
 
                 matched = False
                 itype = str(ind.get("type", "unknown"))
@@ -58,13 +66,17 @@ def detect_cms(
                     if path and path in url and status == 200:
                         matched = True
                 elif itype == "meta":
-                    # Matching durci
-                    if content and "<meta" in body and "content=" in body and content in body:
+                    if (
+                        content
+                        and "<meta" in body
+                        and "content=" in body
+                        and content in body
+                    ):
                         matched = True
                 elif itype == "body":
                     if content and content in body:
                         matched = True
-                
+
                 if matched:
                     scores[cms_name] += score
                     val = path or content or "match"
@@ -73,14 +85,17 @@ def detect_cms(
     if scores:
         best_cms = max(scores, key=scores.get)
         best_score = scores[best_cms]
-        
+
         if best_score >= 3:
-            artifact.detected_cms = best_cms # type: ignore
+            artifact.detected_cms = best_cms  # type: ignore
             artifact.confidence = "high"
         elif best_score >= 1:
-            artifact.detected_cms = best_cms # type: ignore
+            artifact.detected_cms = best_cms  # type: ignore
             artifact.confidence = "medium"
 
     artifact.evidence = sorted(evidence_set)
-    artifact.timings_ms = int((time.perf_counter() - t0) * 1000)
+    # CORRECTION : Assignation objet TimingsMs
+    duration = int((time.perf_counter() - t0) * 1000)
+    artifact.timings_ms = TimingsMs(total=duration)
+
     return artifact
