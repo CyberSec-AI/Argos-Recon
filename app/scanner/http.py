@@ -14,17 +14,17 @@ from app.core.config import (
     GLOBAL_RATE_LIMIT,
     JITTER_RANGE,
     MAX_RETRIES,
-    USER_AGENT_POOL,
 )
+from app.core.stealth_profiles import STEALTH_PROFILES
 from app.schemas.types import HTTPRequestArtifactV1, TargetV1, TimingsMs
 
-# Etat global du scheduler pour le processus
+# État global du scheduler pour le processus
 _last_reserved_time = 0.0
 _scheduler_lock = asyncio.Lock()
 
 
 def _build_url(target: TargetV1, path: str) -> str:
-    """Helper interne pour la construction d'URL."""
+    """Helper interne pour la construction d'URL sécurisée."""
     base = target.canonical_url.rstrip("/")
     if not base:
         scheme = target.scheme or "https"
@@ -33,21 +33,15 @@ def _build_url(target: TargetV1, path: str) -> str:
     return f"{base}{clean_path}"
 
 
-async def _global_throttle():
-    """
-    A.1 & A.3 : Stealth Scheduler avec réservation de slot et Jitter systématique.
-    Garantit un intervalle minimum entre les départs de requêtes.
-    """
+async def _global_throttle() -> None:
+    """Garantit un intervalle minimum entre les départs de requêtes (A.1 & A.3)."""
     global _last_reserved_time
     async with _scheduler_lock:
         now = time.monotonic()
-
-        # Réservation du slot théorique (Slot Reservation Pattern)
         next_slot = max(now, _last_reserved_time) + GLOBAL_RATE_LIMIT
         wait_time = next_slot - now
         _last_reserved_time = next_slot
 
-        # Ajout du Jitter systématique même en cas de retard
         actual_wait = max(0.0, wait_time)
         if ENABLE_JITTER:
             actual_wait += random.uniform(*JITTER_RANGE)
@@ -63,27 +57,25 @@ async def _fetch_single(
     client: httpx.AsyncClient,
     semaphore: Optional[asyncio.Semaphore] = None,
 ) -> HTTPRequestArtifactV1:
+    """Effectue une requête unique avec gestion de furtivité et résilience."""
     url = _build_url(target, path)
     t0 = time.perf_counter()
 
-    # Initialisation explicite
     req_art = HTTPRequestArtifactV1(
         request_id=str(ulid.new()),
         target_id=target.target_id,
         url=url,
         effective_url=url,
         method="GET",
-        response_truncated=False,  # Initialisation explicite
+        response_truncated=False,
         timings_ms=TimingsMs(),
     )
 
     attempts = 0
     current_retry_delay = 0.0
-    # Codes d'erreurs transitoires éligibles au retry
     retryable_codes = {429, 502, 503, 504}
 
     while attempts <= MAX_RETRIES:
-        # Gestion du délai (Priorité Retry-After > Global Throttle)
         if current_retry_delay > 0:
             await asyncio.sleep(current_retry_delay)
             current_retry_delay = 0.0
@@ -91,10 +83,10 @@ async def _fetch_single(
             await _global_throttle()
 
         try:
-            current_headers = {"User-Agent": random.choice(USER_AGENT_POOL)}
+            # Copie pour éviter les effets de bord sur les profils mutables
+            headers = dict(random.choice(STEALTH_PROFILES))
 
-            # Correction B023 : On lie 'current_headers' via un argument par défaut
-            async def do_req(h=current_headers):
+            async def do_req(h: dict[str, str]) -> tuple[str, Optional[int], Optional[str]]:
                 async with client.stream("GET", url, headers=h) as resp:
                     if resp.status_code in retryable_codes:
                         return "retry", resp.status_code, resp.headers.get("Retry-After")
@@ -118,21 +110,21 @@ async def _fetch_single(
 
             if semaphore:
                 async with semaphore:
-                    status, code, r_val = await do_req()
+                    status, code, r_val = await do_req(headers)
             else:
-                status, code, r_val = await do_req()
+                status, code, r_val = await do_req(headers)
 
             if status == "retry":
-                # Ne pas "brûler" de tentative si un Retry-After numérique est fourni sur 429
-                if not (code == 429 and r_val and r_val.isdigit()):
-                    attempts += 1
+                attempts += 1
+                if attempts > MAX_RETRIES:
+                    req_art.error = f"Max retries reached (HTTP {code})"
+                    break
 
                 if r_val and r_val.isdigit():
                     current_retry_delay = float(r_val)
                 else:
                     current_retry_delay = float(BACKOFF_FACTOR**attempts)
                 continue
-
             break
 
         except Exception as e:
@@ -146,7 +138,6 @@ async def _fetch_single(
     return req_art
 
 
-# Les fonctions suivantes restent inchangées mais sont nécessaires pour l'interface du module
 async def fetch_http_baseline(
     target: TargetV1, response_raw_max_bytes: int, client: httpx.AsyncClient
 ) -> HTTPRequestArtifactV1:
@@ -168,12 +159,16 @@ async def probe_paths(
         if isinstance(res, HTTPRequestArtifactV1):
             final_artifacts.append(res)
         else:
+            # Sécurisation de l'artefact d'erreur avec les champs requis (symétrie)
             err_msg = str(res) if isinstance(res, Exception) else "Unknown crash"
+            err_url = _build_url(target, paths[i])
             err_art = HTTPRequestArtifactV1(
                 request_id=str(ulid.new()),
                 target_id=target.target_id,
-                url=_build_url(target, paths[i]),
+                url=err_url,
+                effective_url=err_url,
                 method="GET",
+                response_truncated=False,
                 error=f"Probe crash: {err_msg}",
                 timings_ms=TimingsMs(total=0),
             )
