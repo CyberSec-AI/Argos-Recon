@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional, cast
 
 import httpx
 import ulid
@@ -33,12 +33,16 @@ from app.schemas.types import HTTPRequestArtifactV1, TLSArtifactV1
 
 class ScanEngine:
     def __init__(self):
-        self.probes = load_json_list("probes.json")
+        # Correction MyPy : On caste le retour car load_json_list est typé pour renvoyer des dicts,
+        # alors que probes.json contient des strings.
+        self.probes: List[str] = cast(List[str], load_json_list("probes.json"))
         self.cms_rules = load_cms_rules()
         self.cve_db = load_cve_db()
 
         if not isinstance(self.cms_rules, list):
             self.cms_rules = []
+
+        # self.probes est maintenant correctement typé List[str]
         if not self.probes:
             self.probes = ["/robots.txt", "/sitemap.xml", "/wp-login.php", "/xmlrpc.php"]
 
@@ -67,7 +71,10 @@ class ScanEngine:
             )
 
             async with httpx.AsyncClient(
-                verify=False, timeout=timeout_config, follow_redirects=True
+                # FIX SECURITY: On ajoute '# nosec' pour autoriser verify=False (requis pour le scan)
+                verify=False,
+                timeout=timeout_config,
+                follow_redirects=True,  # nosec
             ) as http_client:
                 results = await asyncio.gather(
                     fetch_tls_facts(ctx.target),
@@ -76,13 +83,11 @@ class ScanEngine:
                 )
                 tls_res, http_res = results
 
-                # Correction MyPy : Vérification de type pour TLS
                 if isinstance(tls_res, TLSArtifactV1):
                     ctx.tls = tls_res
                 elif isinstance(tls_res, Exception):
                     ctx.add_error("tls", "failed", str(tls_res))
 
-                # Correction MyPy : Vérification de type pour HTTP
                 http_baseline: Optional[HTTPRequestArtifactV1] = None
                 if isinstance(http_res, HTTPRequestArtifactV1):
                     ctx.http.append(http_res)

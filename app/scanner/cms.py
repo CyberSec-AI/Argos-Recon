@@ -32,11 +32,15 @@ def detect_cms(
                 itype = ind.get("type")
                 icontent = ind.get("content", "")
 
+                # FIX: Ignorer les règles avec un contenu vide (évite les faux positifs)
+                if not icontent:
+                    continue
+
                 if itype == "body" and icontent in (a.response_analysis_snippet or ""):
                     matched = True
                     break
                 if itype == "header":
-                    # Correction B007 : Utilisation de '_' pour la variable h_name non utilisée
+                    # Correction B007: variable non utilisée
                     for _, h_val in a.headers.items():
                         if icontent.lower() in h_val.lower():
                             matched = True
@@ -51,7 +55,6 @@ def detect_cms(
     confidence = "low"
 
     if results:
-        # Utilisation d'une lambda explicite pour MyPy
         best_cms = max(results, key=lambda k: results[k])
         count = results[best_cms]
         cms_name = best_cms
