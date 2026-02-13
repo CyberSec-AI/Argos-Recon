@@ -11,9 +11,9 @@ from app.schemas.finding_v1 import (
     FindingTargetRefV1,
     FindingV1,
 )
-from app.schemas.types import DNSArtifactV1, TargetV1
+from app.schemas.types import DNSArtifactV1, Severity, TargetV1
 
-# --- Helpers Globaux ---
+# ... (Helpers SPFAnalysis / DMARCAnalysis / parse_dmarc inchangés) ...
 
 
 @dataclass
@@ -98,9 +98,6 @@ def analyze_dmarc(dmarc_txt: List[str]) -> DMARCAnalysis:
     return DMARCAnalysis(True, rec, tags, p.lower() if p else None, warn)
 
 
-# --- Fonction Principale ---
-
-
 def evaluate_pb3(dns: DNSArtifactV1, target: TargetV1) -> Optional[FindingV1]:
     if dns.error:
         return None
@@ -108,79 +105,74 @@ def evaluate_pb3(dns: DNSArtifactV1, target: TargetV1) -> Optional[FindingV1]:
     spf = analyze_spf(dns.txt)
     dmarc = analyze_dmarc(dns.dmarc)
 
-    severity = "info"
+    severity_val: Severity = "info"  # Correction MyPy : Utilisation du type Literal
     title = ""
     desc = ""
     score_val = 0
 
     if not spf.present and not dmarc.present:
-        severity = "critical"
+        severity_val = "critical"
         title = "Email Spoofing Risk: SPF and DMARC Missing"
         desc = "Domain is completely unprotected against email spoofing."
         score_val = 9
     elif not dmarc.present:
-        severity = "high"
+        severity_val = "high"
         title = "Email Spoofing Risk: DMARC Missing"
         desc = "No DMARC record found."
         score_val = 7
     elif dmarc.present and not dmarc.policy:
-        severity = "high"
+        severity_val = "high"
         title = "Email Security: DMARC Misconfigured"
         desc = "DMARC record exists but has no policy."
         score_val = 6
     elif spf.all_mechanism == "+all":
-        severity = "high"
+        severity_val = "high"
         title = "Email Security: SPF Permissive (+all)"
         desc = "SPF record allows any IP to send emails."
         score_val = 7
     elif dmarc.policy == "none":
-        severity = "medium"
+        severity_val = "medium"
         title = "Email Security: DMARC Policy is None"
         desc = "DMARC is in monitoring mode."
         score_val = 5
     elif spf.present and not spf.all_mechanism:
-        severity = "medium"
+        severity_val = "medium"
         title = "Email Security: SPF Misconfigured"
         desc = "SPF record lacks terminating mechanism."
         score_val = 4
     elif spf.all_mechanism == "?all":
-        severity = "medium"
+        severity_val = "medium"
         title = "Email Security: SPF Neutral"
         desc = "SPF allows neutrality."
         score_val = 4
     else:
         return None
 
-    evidence_list = []
-    evidence_list.append(
+    evidence_list = [
         FindingEvidenceRefV1(
             evidence_id=f"ev_spf_{str(ulid.new())}",
             type="dns_txt",
             ref={"field": "txt"},
             snippet=f"SPF: {spf.record or 'Missing'}",
-        )
-    )
-    evidence_list.append(
+        ),
         FindingEvidenceRefV1(
             evidence_id=f"ev_dmarc_{str(ulid.new())}",
             type="dns_txt",
             ref={"field": "dmarc"},
             snippet=f"DMARC: {dmarc.record or 'Missing'}",
-        )
-    )
+        ),
+    ]
 
     return FindingV1(
         finding_id=str(ulid.new()),
         playbook_id="PB3_EMAIL_AUTH",
         title=title,
         summary=desc,
-        severity=severity,
+        severity=severity_val,
         confidence="high",
         score=FindingScoreV1(total=score_val, threshold=1, model="risk_v1"),
         target=FindingTargetRefV1(
-            target_id=target.target_id,
-            input=target.input,
-            canonical_url=target.canonical_url,
+            target_id=target.target_id, input=target.input, canonical_url=target.canonical_url
         ),
         reasoning={
             "why_it_matters": "Prevent phishing.",

@@ -6,6 +6,7 @@ import socket
 import ssl
 import time
 from datetime import datetime, timezone
+from typing import Any, Optional, cast
 
 import ulid
 
@@ -21,25 +22,23 @@ def _is_ip_address(host: str) -> bool:
         return False
 
 
-def _parse_ssl_date(date_str: str) -> str | None:
-    """Convertit 'May 26 23:59:59 2026 GMT' en ISO 8601."""
+def _parse_ssl_date(date_str: Optional[str]) -> Optional[str]:
     if not date_str:
         return None
     try:
         dt = datetime.strptime(date_str, "%b %d %H:%M:%S %Y GMT")
         return dt.replace(tzinfo=timezone.utc).isoformat()
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 
-def _extract_x509_field(cert_dict: dict, section: str, attr_name: str) -> str | None:
-    """Extraction robuste depuis getpeercert()."""
+def _extract_x509_field(cert_dict: dict[str, Any], section: str, attr_name: str) -> Optional[str]:
     try:
         rdns = cert_dict.get(section, ())
         for rdn in rdns:
             for key, value in rdn:
                 if key == attr_name:
-                    return value
+                    return str(value)
     except Exception:
         pass
     return None
@@ -63,46 +62,30 @@ def _fetch_tls_sync(target: TargetV1) -> TLSArtifactV1:
     artifact.ip = target_ip
     server_name = None if _is_ip_address(hostname) else hostname
 
-    raw_sock = None
-    conn = None
-
     try:
         context = ssl.create_default_context()
         context.check_hostname = False
-        # SECURITY: Mode Reconnaissance. On veut les infos même si invalide.
         context.verify_mode = ssl.CERT_NONE
 
-        raw_sock = socket.create_connection((target_ip, port), timeout=TLS_TIMEOUT)
-        conn = context.wrap_socket(raw_sock, server_hostname=server_name)
+        with socket.create_connection((target_ip, port), timeout=TLS_TIMEOUT) as raw_sock:
+            with context.wrap_socket(raw_sock, server_hostname=server_name) as conn:
+                cipher = conn.cipher()
+                if cipher:
+                    artifact.protocol = str(cipher[1])
+                    artifact.cipher = str(cipher[0])
 
-        cipher = conn.cipher()
-        if cipher:
-            artifact.protocol = cipher[1]
-            artifact.cipher = cipher[0]
+                cert = conn.getpeercert()
+                if cert:
+                    # On cast le certificat en dictionnaire pour MyPy
+                    cert_dict = cast(dict[str, Any], cert)
+                    artifact.cn = _extract_x509_field(cert_dict, "subject", "commonName")
+                    artifact.issuer_o = _extract_x509_field(cert_dict, "issuer", "organizationName")
 
-        cert = conn.getpeercert()
-        if cert:
-            artifact.cn = _extract_x509_field(cert, "subject", "commonName")
-            artifact.issuer_o = _extract_x509_field(cert, "issuer", "organizationName")
-
-            raw_not_after = cert.get("notAfter")
-            if raw_not_after:
-                artifact.not_after = _parse_ssl_date(raw_not_after)
-
+                    raw_not_after = cert_dict.get("notAfter")
+                    if isinstance(raw_not_after, str):
+                        artifact.not_after = _parse_ssl_date(raw_not_after)
     except Exception as e:
         artifact.error = f"{type(e).__name__}: {str(e)}"
-
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        elif raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
     duration = int((time.perf_counter() - t0) * 1000)
     artifact.timings_ms = TimingsMs(total=duration)
