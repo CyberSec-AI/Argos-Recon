@@ -27,7 +27,6 @@ async def _fetch_single(
     client: httpx.AsyncClient,
     semaphore: Optional[asyncio.Semaphore] = None,
 ) -> HTTPRequestArtifactV1:
-
     url = _build_url(target, path)
     t0 = time.perf_counter()
 
@@ -52,7 +51,6 @@ async def _fetch_single(
 
     async def _execute_request():
         try:
-            # STREAMING STRICT O(n)
             async with client.stream("GET", url) as response:
                 req_art.status_code = response.status_code
                 req_art.effective_url = str(response.url)
@@ -109,26 +107,24 @@ async def probe_paths(
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
 ) -> List[HTTPRequestArtifactV1]:
-
-    tasks = [
-        _fetch_single(target, p, response_raw_max_bytes, client, semaphore)
-        for p in paths
-    ]
+    tasks = [_fetch_single(target, p, response_raw_max_bytes, client, semaphore) for p in paths]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    final_artifacts = []
+    final_artifacts: List[HTTPRequestArtifactV1] = []
     for i, res in enumerate(results):
-        if isinstance(res, Exception):
-            url_attempt = _build_url(target, paths[i])
+        if isinstance(res, HTTPRequestArtifactV1):
+            final_artifacts.append(res)
+        else:
+            # MyPy Correction : Gestion des objets de type BaseException
+            err_msg = str(res) if isinstance(res, Exception) else "Unknown crash"
             err_art = HTTPRequestArtifactV1(
                 request_id=str(ulid.new()),
                 target_id=target.target_id,
-                url=url_attempt,
+                url=_build_url(target, paths[i]),
                 method="GET",
-                error=f"Probe crash: {str(res)}",
+                error=f"Probe crash: {err_msg}",
                 timings_ms=TimingsMs(total=0),
             )
             final_artifacts.append(err_art)
-        else:
-            final_artifacts.append(res)
+
     return final_artifacts

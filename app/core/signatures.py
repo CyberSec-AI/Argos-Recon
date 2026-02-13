@@ -57,9 +57,7 @@ TAKEOVER_SIGNATURES: Tuple[TakeoverSignature, ...] = (
     TakeoverSignature(
         service="Tumblr",
         cname_suffixes=(".tumblr.com",),
-        body_markers=(
-            "whatever you were looking for doesn't currently exist at this address",
-        ),
+        body_markers=("whatever you were looking for doesn't currently exist at this address",),
         status_codes=(404,),
     ),
     TakeoverSignature(

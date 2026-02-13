@@ -73,21 +73,13 @@ async def test_engine_probes_on_403_behavior():
     )
 
     with (
-        patch(
-            "app.services.scan_engine.normalize_target", new_callable=AsyncMock
-        ) as mock_norm,
-        patch(
-            "app.services.scan_engine.collect_dns_async", new_callable=AsyncMock
-        ) as mock_dns,
-        patch(
-            "app.services.scan_engine.fetch_tls_facts", new_callable=AsyncMock
-        ) as mock_tls,
+        patch("app.services.scan_engine.normalize_target", new_callable=AsyncMock) as mock_norm,
+        patch("app.services.scan_engine.collect_dns_async", new_callable=AsyncMock) as mock_dns,
+        patch("app.services.scan_engine.fetch_tls_facts", new_callable=AsyncMock) as mock_tls,
         patch(
             "app.services.scan_engine.fetch_http_baseline", new_callable=AsyncMock
         ) as mock_baseline,
-        patch(
-            "app.services.scan_engine.probe_paths", new_callable=AsyncMock
-        ) as mock_probe,
+        patch("app.services.scan_engine.probe_paths", new_callable=AsyncMock) as mock_probe,
     ):
         mock_norm.return_value = TargetV1(
             target_id="t",

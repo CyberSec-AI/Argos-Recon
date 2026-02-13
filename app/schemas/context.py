@@ -40,6 +40,4 @@ class ScanContext(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def add_error(self, component: str, error_type: str, message: str):
-        self.errors.append(
-            ScanError(component=component, error_type=error_type, message=message)
-        )
+        self.errors.append(ScanError(component=component, error_type=error_type, message=message))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Optional
 
 import httpx
 import ulid
@@ -27,6 +28,7 @@ from app.scanner.dns import collect_dns_async
 from app.scanner.http import fetch_http_baseline, probe_paths
 from app.scanner.tls import fetch_tls_facts
 from app.schemas.context import ScanContext
+from app.schemas.types import HTTPRequestArtifactV1, TLSArtifactV1
 
 
 class ScanEngine:
@@ -34,15 +36,11 @@ class ScanEngine:
         self.probes = load_json_list("probes.json")
         self.cms_rules = load_cms_rules()
         self.cve_db = load_cve_db()
+
         if not isinstance(self.cms_rules, list):
             self.cms_rules = []
         if not self.probes:
-            self.probes = [
-                "/robots.txt",
-                "/sitemap.xml",
-                "/wp-login.php",
-                "/xmlrpc.php",
-            ]
+            self.probes = ["/robots.txt", "/sitemap.xml", "/wp-login.php", "/xmlrpc.php"]
 
     async def run(self, url: str) -> dict:
         run_id = str(ulid.new())
@@ -71,31 +69,28 @@ class ScanEngine:
             async with httpx.AsyncClient(
                 verify=False, timeout=timeout_config, follow_redirects=True
             ) as http_client:
-
                 results = await asyncio.gather(
                     fetch_tls_facts(ctx.target),
-                    fetch_http_baseline(
-                        ctx.target, RESPONSE_RAW_MAX_BYTES, http_client
-                    ),
+                    fetch_http_baseline(ctx.target, RESPONSE_RAW_MAX_BYTES, http_client),
                     return_exceptions=True,
                 )
                 tls_res, http_res = results
 
-                if isinstance(tls_res, Exception):
-                    ctx.add_error("tls", "failed", str(tls_res))
-                else:
+                # Correction MyPy : Vérification de type pour TLS
+                if isinstance(tls_res, TLSArtifactV1):
                     ctx.tls = tls_res
+                elif isinstance(tls_res, Exception):
+                    ctx.add_error("tls", "failed", str(tls_res))
 
-                http_baseline = None
-                if isinstance(http_res, Exception):
-                    ctx.add_error("http", "baseline_failed", str(http_res))
-                else:
+                # Correction MyPy : Vérification de type pour HTTP
+                http_baseline: Optional[HTTPRequestArtifactV1] = None
+                if isinstance(http_res, HTTPRequestArtifactV1):
                     ctx.http.append(http_res)
                     http_baseline = http_res
+                elif isinstance(http_res, Exception):
+                    ctx.add_error("http", "baseline_failed", str(http_res))
 
-                should_probe = (http_baseline is not None) or (
-                    len(target.resolved_ips) > 0
-                )
+                should_probe = (http_baseline is not None) or (len(target.resolved_ips) > 0)
 
                 if should_probe:
                     budget = MAX_HTTP_REQUESTS_PER_SCAN - 1
@@ -121,9 +116,7 @@ class ScanEngine:
                 ctx.signals = extract_signals(ctx.tls, ctx.http)
 
                 if ctx.tls:
-                    f1 = evaluate_pb1(
-                        ctx.signals, ctx.target, ctx.tls.tls_id, str(ulid.new())
-                    )
+                    f1 = evaluate_pb1(ctx.signals, ctx.target, ctx.tls.tls_id, str(ulid.new()))
                     if f1:
                         ctx.findings.append(f1)
 

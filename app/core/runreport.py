@@ -18,7 +18,6 @@ from app.schemas.runreport_v1 import (
 def build_report_from_context(
     ctx: ScanContext, finished_at: datetime, duration_ms: int
 ) -> RunReportV1:
-
     # 1. Counts
     counts_map = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for f in ctx.findings:
@@ -43,9 +42,7 @@ def build_report_from_context(
         else:
             verdict = "Warnings"
 
-    top_findings = [
-        f.title for f in sorted_findings if f.severity.lower() in ("critical", "high")
-    ]
+    top_findings = [f.title for f in sorted_findings if f.severity.lower() in ("critical", "high")]
     tls_list = [ctx.tls] if ctx.tls else []
 
     artifacts_section = RunReportArtifactsV1(

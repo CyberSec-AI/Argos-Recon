@@ -9,7 +9,6 @@ from app.schemas.types import HTTPRequestArtifactV1, SignalV1, TLSArtifactV1
 def extract_signals(
     tls_artifact: Optional[TLSArtifactV1], http_artifacts: List[HTTPRequestArtifactV1]
 ) -> List[SignalV1]:
-
     signals = []
 
     if tls_artifact:
@@ -41,11 +40,7 @@ def extract_signals(
                 pass
 
         # Fallback sur erreur explicite
-        if (
-            not is_expired
-            and tls_artifact.error
-            and "expired" in tls_artifact.error.lower()
-        ):
+        if not is_expired and tls_artifact.error and "expired" in tls_artifact.error.lower():
             is_expired = True
 
         signals.append(
