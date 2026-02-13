@@ -1,23 +1,59 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import time
-from typing import List, Optional
-from urllib.parse import urlparse
+from typing import Optional
 
 import httpx
 import ulid
 
+from app.core.config import (
+    BACKOFF_FACTOR,
+    ENABLE_JITTER,
+    GLOBAL_RATE_LIMIT,
+    JITTER_RANGE,
+    MAX_RETRIES,
+    USER_AGENT_POOL,
+)
 from app.schemas.types import HTTPRequestArtifactV1, TargetV1, TimingsMs
+
+# Etat global du scheduler pour le processus
+_last_reserved_time = 0.0
+_scheduler_lock = asyncio.Lock()
 
 
 def _build_url(target: TargetV1, path: str) -> str:
+    """Helper interne pour la construction d'URL."""
     base = target.canonical_url.rstrip("/")
     if not base:
         scheme = target.scheme or "https"
         base = f"{scheme}://{target.host}"
     clean_path = path if path.startswith("/") else f"/{path}"
     return f"{base}{clean_path}"
+
+
+async def _global_throttle():
+    """
+    A.1 & A.3 : Stealth Scheduler avec réservation de slot et Jitter systématique.
+    Garantit un intervalle minimum entre les départs de requêtes.
+    """
+    global _last_reserved_time
+    async with _scheduler_lock:
+        now = time.monotonic()
+
+        # Réservation du slot théorique (Slot Reservation Pattern)
+        next_slot = max(now, _last_reserved_time) + GLOBAL_RATE_LIMIT
+        wait_time = next_slot - now
+        _last_reserved_time = next_slot
+
+        # Ajout du Jitter systématique même en cas de retard
+        actual_wait = max(0.0, wait_time)
+        if ENABLE_JITTER:
+            actual_wait += random.uniform(*JITTER_RANGE)
+
+        if actual_wait > 0:
+            await asyncio.sleep(actual_wait)
 
 
 async def _fetch_single(
@@ -30,70 +66,87 @@ async def _fetch_single(
     url = _build_url(target, path)
     t0 = time.perf_counter()
 
-    parsed = urlparse(url)
-    is_tls = parsed.scheme.lower() == "https"
-    real_host = parsed.hostname or target.host
-    real_port = parsed.port if parsed.port else (443 if is_tls else 80)
-
+    # Initialisation explicite
     req_art = HTTPRequestArtifactV1(
         request_id=str(ulid.new()),
         target_id=target.target_id,
         url=url,
         effective_url=url,
-        host=real_host,
-        ip=target.resolved_ips[0] if target.resolved_ips else "",
-        port=real_port,
-        tls=is_tls,
         method="GET",
-        raw="",
+        response_truncated=False,  # Initialisation explicite
         timings_ms=TimingsMs(),
     )
 
-    async def _execute_request():
+    attempts = 0
+    current_retry_delay = 0.0
+    # Codes d'erreurs transitoires éligibles au retry
+    retryable_codes = {429, 502, 503, 504}
+
+    while attempts <= MAX_RETRIES:
+        # Gestion du délai (Priorité Retry-After > Global Throttle)
+        if current_retry_delay > 0:
+            await asyncio.sleep(current_retry_delay)
+            current_retry_delay = 0.0
+        else:
+            await _global_throttle()
+
         try:
-            async with client.stream("GET", url) as response:
-                req_art.status_code = response.status_code
-                req_art.effective_url = str(response.url)
-                req_art.headers = dict(response.headers)
+            current_headers = {"User-Agent": random.choice(USER_AGENT_POOL)}
 
-                buffer = bytearray()
-                truncated = False
+            # Correction B023 : On lie 'current_headers' via un argument par défaut
+            async def do_req(h=current_headers):
+                async with client.stream("GET", url, headers=h) as resp:
+                    if resp.status_code in retryable_codes:
+                        return "retry", resp.status_code, resp.headers.get("Retry-After")
 
-                async for chunk in response.aiter_bytes():
-                    remaining = max_bytes - len(buffer)
-                    if remaining <= 0:
-                        truncated = True
-                        break
+                    req_art.status_code = resp.status_code
+                    req_art.effective_url = str(resp.url)
+                    req_art.headers = dict(resp.headers)
 
-                    chunk_to_add = chunk[:remaining]
-                    buffer.extend(chunk_to_add)
+                    buffer = bytearray()
+                    async for chunk in resp.aiter_bytes():
+                        if len(buffer) + len(chunk) > max_bytes:
+                            buffer.extend(chunk[: max_bytes - len(buffer)])
+                            req_art.response_truncated = True
+                            break
+                        buffer.extend(chunk)
 
-                    if len(chunk) > remaining:
-                        truncated = True
-                        break
+                    req_art.response_analysis_snippet = buffer.decode("utf-8", errors="replace")[
+                        :2048
+                    ]
+                    return "ok", resp.status_code, None
 
-                req_art.response_truncated = truncated
-                final_bytes = bytes(buffer)
+            if semaphore:
+                async with semaphore:
+                    status, code, r_val = await do_req()
+            else:
+                status, code, r_val = await do_req()
 
-                try:
-                    text_sample = final_bytes.decode("utf-8", errors="replace")
-                    req_art.response_analysis_snippet = text_sample[:2048]
-                except Exception:
-                    pass
+            if status == "retry":
+                # Ne pas "brûler" de tentative si un Retry-After numérique est fourni sur 429
+                if not (code == 429 and r_val and r_val.isdigit()):
+                    attempts += 1
+
+                if r_val and r_val.isdigit():
+                    current_retry_delay = float(r_val)
+                else:
+                    current_retry_delay = float(BACKOFF_FACTOR**attempts)
+                continue
+
+            break
+
         except Exception as e:
-            req_art.error = str(e)
+            attempts += 1
+            if attempts > MAX_RETRIES:
+                req_art.error = f"Max retries reached: {str(e)}"
+                break
+            current_retry_delay = float(BACKOFF_FACTOR**attempts)
 
-    if semaphore:
-        async with semaphore:
-            await _execute_request()
-    else:
-        await _execute_request()
-
-    duration = int((time.perf_counter() - t0) * 1000)
-    req_art.timings_ms = TimingsMs(total=duration)
+    req_art.timings_ms.total = int((time.perf_counter() - t0) * 1000)
     return req_art
 
 
+# Les fonctions suivantes restent inchangées mais sont nécessaires pour l'interface du module
 async def fetch_http_baseline(
     target: TargetV1, response_raw_max_bytes: int, client: httpx.AsyncClient
 ) -> HTTPRequestArtifactV1:
@@ -102,20 +155,19 @@ async def fetch_http_baseline(
 
 async def probe_paths(
     target: TargetV1,
-    paths: List[str],
+    paths: list[str],
     response_raw_max_bytes: int,
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
-) -> List[HTTPRequestArtifactV1]:
+) -> list[HTTPRequestArtifactV1]:
     tasks = [_fetch_single(target, p, response_raw_max_bytes, client, semaphore) for p in paths]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    final_artifacts: List[HTTPRequestArtifactV1] = []
+    final_artifacts: list[HTTPRequestArtifactV1] = []
     for i, res in enumerate(results):
         if isinstance(res, HTTPRequestArtifactV1):
             final_artifacts.append(res)
         else:
-            # MyPy Correction : Gestion des objets de type BaseException
             err_msg = str(res) if isinstance(res, Exception) else "Unknown crash"
             err_art = HTTPRequestArtifactV1(
                 request_id=str(ulid.new()),
