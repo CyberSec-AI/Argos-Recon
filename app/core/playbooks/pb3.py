@@ -1,184 +1,78 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 
 import ulid
 
-from app.schemas.finding_v1 import (
-    FindingEvidenceRefV1,
-    FindingScoreV1,
-    FindingTargetRefV1,
-    FindingV1,
-)
+from app.schemas.finding_v1 import EvidenceV1, FindingScoreV1, FindingTargetRefV1, FindingV1
 from app.schemas.types import DNSArtifactV1, Severity, TargetV1
-
-# ... (Helpers SPFAnalysis / DMARCAnalysis / parse_dmarc inchangés) ...
-
-
-@dataclass
-class SPFAnalysis:
-    present: bool
-    record: Optional[str]
-    all_mechanism: Optional[str]
-    warning: Optional[str]
-
-
-@dataclass
-class DMARCAnalysis:
-    present: bool
-    record: Optional[str]
-    tags: Dict[str, str]
-    policy: Optional[str]
-    warning: Optional[str]
-
-
-def _pick_first_spf(records: List[str]) -> Optional[str]:
-    for r in records:
-        if r.strip().lower().startswith("v=spf1"):
-            return r.strip()
-    return None
-
-
-def _pick_first_dmarc(records: List[str]) -> Optional[str]:
-    for r in records:
-        if r.strip().lower().startswith("v=dmarc1"):
-            return r.strip()
-    return None
-
-
-def analyze_spf(root_txt: List[str]) -> SPFAnalysis:
-    spf = _pick_first_spf(root_txt)
-    if not spf:
-        return SPFAnalysis(False, None, None, "No SPF record found on root TXT.")
-
-    s = spf.lower()
-    all_mech = None
-    for mech in ("+all", "-all", "~all", "?all"):
-        if mech in s.split():
-            all_mech = mech
-            break
-
-    if all_mech == "+all":
-        return SPFAnalysis(True, spf, all_mech, "SPF is overly permissive (+all).")
-    if all_mech == "?all":
-        return SPFAnalysis(True, spf, all_mech, "SPF is neutral (?all).")
-    if all_mech == "~all":
-        return SPFAnalysis(True, spf, all_mech, "SPF uses softfail (~all).")
-    if not all_mech:
-        return SPFAnalysis(True, spf, None, "SPF record found but no all-mechanism.")
-
-    return SPFAnalysis(True, spf, all_mech, None)
-
-
-def parse_dmarc(record: str) -> Dict[str, str]:
-    tags = {}
-    parts = record.split(";")
-    for part in parts:
-        if "=" in part:
-            k, v = part.split("=", 1)
-            tags[k.strip().lower()] = v.strip()
-    return tags
-
-
-def analyze_dmarc(dmarc_txt: List[str]) -> DMARCAnalysis:
-    rec = _pick_first_dmarc(dmarc_txt)
-    if not rec:
-        return DMARCAnalysis(False, None, {}, None, "No DMARC record found.")
-
-    tags = parse_dmarc(rec)
-    p = tags.get("p")
-    warn = None
-
-    if not p:
-        warn = "Missing mandatory 'p=' policy."
-    elif p.lower() == "none":
-        warn = "Policy is p=none."
-
-    return DMARCAnalysis(True, rec, tags, p.lower() if p else None, warn)
 
 
 def evaluate_pb3(dns: DNSArtifactV1, target: TargetV1) -> Optional[FindingV1]:
+    """
+    PB3: Analyse de l'authentification Email (SPF/DMARC).
+    """
     if dns.error:
         return None
 
-    spf = analyze_spf(dns.txt)
-    dmarc = analyze_dmarc(dns.dmarc)
+    spf_present = any("v=spf1" in txt.lower() for txt in dns.txt)
+    dmarc_present = any("v=dmarc1" in txt.lower() for txt in dns.dmarc)
 
-    severity_val: Severity = "info"  # Correction MyPy : Utilisation du type Literal
-    title = ""
-    desc = ""
-    score_val = 0
-
-    if not spf.present and not dmarc.present:
-        severity_val = "critical"
-        title = "Email Spoofing Risk: SPF and DMARC Missing"
-        desc = "Domain is completely unprotected against email spoofing."
-        score_val = 9
-    elif not dmarc.present:
-        severity_val = "high"
-        title = "Email Spoofing Risk: DMARC Missing"
-        desc = "No DMARC record found."
-        score_val = 7
-    elif dmarc.present and not dmarc.policy:
-        severity_val = "high"
-        title = "Email Security: DMARC Misconfigured"
-        desc = "DMARC record exists but has no policy."
-        score_val = 6
-    elif spf.all_mechanism == "+all":
-        severity_val = "high"
-        title = "Email Security: SPF Permissive (+all)"
-        desc = "SPF record allows any IP to send emails."
-        score_val = 7
-    elif dmarc.policy == "none":
-        severity_val = "medium"
-        title = "Email Security: DMARC Policy is None"
-        desc = "DMARC is in monitoring mode."
-        score_val = 5
-    elif spf.present and not spf.all_mechanism:
-        severity_val = "medium"
-        title = "Email Security: SPF Misconfigured"
-        desc = "SPF record lacks terminating mechanism."
-        score_val = 4
-    elif spf.all_mechanism == "?all":
-        severity_val = "medium"
-        title = "Email Security: SPF Neutral"
-        desc = "SPF allows neutrality."
-        score_val = 4
-    else:
+    if spf_present and dmarc_present:
         return None
 
+    severity_val: Severity = "info"
+    title = "Email Authentication Weakness"
+    summary = ""
+    score_val = 1
+
+    if not spf_present and not dmarc_present:
+        title = "Email Spoofing Risk: SPF and DMARC Missing"
+        summary = "Domain is completely unprotected against email spoofing."
+        severity_val = "critical"
+        score_val = 9
+    elif not dmarc_present:
+        title = "Email Spoofing Risk: DMARC Missing"
+        summary = "No DMARC record found, allowing potential unauthorized use."
+        severity_val = "high"
+        score_val = 7
+    elif not spf_present:
+        title = "Email Spoofing Risk: SPF Missing"
+        summary = "SPF record is missing."
+        severity_val = "medium"
+        score_val = 5
+
+    is_partial = any(w.startswith("TXT@") or "_dmarc" in w for w in dns.warnings)
+    if (dns.registrable_domain_method == "naive" or is_partial) and severity_val in (
+        "critical",
+        "high",
+    ):
+        severity_val = "medium"
+        summary += " (Risk degraded due to partial or naive DNS data)."
+
     evidence_list = [
-        FindingEvidenceRefV1(
-            evidence_id=f"ev_spf_{str(ulid.new())}",
-            type="dns_txt",
-            ref={"field": "txt"},
-            snippet=f"SPF: {spf.record or 'Missing'}",
-        ),
-        FindingEvidenceRefV1(
-            evidence_id=f"ev_dmarc_{str(ulid.new())}",
-            type="dns_txt",
-            ref={"field": "dmarc"},
-            snippet=f"DMARC: {dmarc.record or 'Missing'}",
-        ),
+        EvidenceV1(
+            evidence_id=f"ev_dns_{ulid.new()}",
+            type="dns_record_check",
+            snippet=f"Domain checked: {dns.domain_checked_for_email_auth or dns.domain}",
+            ref={"spf": spf_present, "dmarc": dmarc_present, "warnings": dns.warnings},
+        )
     ]
 
     return FindingV1(
         finding_id=str(ulid.new()),
         playbook_id="PB3_EMAIL_AUTH",
         title=title,
-        summary=desc,
+        summary=summary,
         severity=severity_val,
-        confidence="high",
+        confidence="high" if not is_partial else "medium",
         score=FindingScoreV1(total=score_val, threshold=1, model="risk_v1"),
         target=FindingTargetRefV1(
             target_id=target.target_id, input=target.input, canonical_url=target.canonical_url
         ),
         reasoning={
-            "why_it_matters": "Prevent phishing.",
-            "analyst_notes": "Implement strict DMARC/SPF.",
+            "why_it_matters": "Email spoofing is a common vector for phishing.",
+            "analyst_notes": "Results based on registrable domain check.",
         },
-        signals=[],
         evidence=evidence_list,
-        burp_artifacts={"urls": []},
     )

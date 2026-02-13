@@ -7,14 +7,13 @@ from pydantic import BaseModel, Field
 from app.schemas.types import Confidence, Severity
 
 
-# Références
 class FindingTargetRefV1(BaseModel):
     target_id: str
     input: str
     canonical_url: str
 
 
-class FindingEvidenceRefV1(BaseModel):
+class EvidenceV1(BaseModel):
     evidence_id: str
     type: str
     ref: Dict[str, Any]
@@ -32,7 +31,6 @@ class FindingScoreV1(BaseModel):
     model: str = "risk_v1"
 
 
-# Modèle Principal
 class FindingV1(BaseModel):
     schema_version: str = "finding.v1"
     finding_id: str
@@ -45,5 +43,5 @@ class FindingV1(BaseModel):
     target: FindingTargetRefV1
     reasoning: Dict[str, str]
     signals: List[FindingSignalRefV1] = Field(default_factory=list)
-    evidence: List[FindingEvidenceRefV1] = Field(default_factory=list)
+    evidence: List[EvidenceV1] = Field(default_factory=list)
     burp_artifacts: Dict[str, Any] = Field(default_factory=dict)

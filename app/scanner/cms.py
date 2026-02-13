@@ -1,64 +1,49 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import ulid
 
-from app.schemas.types import CMSArtifactV1, HTTPRequestArtifactV1, TargetV1, TimingsMs
+from app.schemas.types import CMSArtifactV1, Confidence, HTTPRequestArtifactV1, TargetV1, TimingsMs
 
 
 def detect_cms(
-    target: TargetV1, http_artifacts: List[HTTPRequestArtifactV1], rules: List[Dict[str, Any]]
+    target: TargetV1,
+    http_artifacts: List[HTTPRequestArtifactV1],
+    rules: Optional[List[Dict[str, Any]]] = None,
 ) -> CMSArtifactV1:
     t0 = time.perf_counter()
-
-    results: dict[str, int] = {}
+    matched_heuristics = set()
+    WP_LOGIN_CODES = {200, 301, 302, 401, 403}
 
     for a in http_artifacts:
-        for rule in rules:
-            if not isinstance(rule, dict) or "name" not in rule:
-                continue
+        if a.error or a.status_code is None:
+            continue
 
-            name = str(rule["name"])
-            indicators = rule.get("indicators", [])
-            if not isinstance(indicators, list):
-                continue
+        h_lc = a.headers
+        body_lc = (a.response_analysis_snippet or "").lower()
+        url_lc = a.url.lower()
 
-            matched = False
-            for ind in indicators:
-                if not isinstance(ind, dict):
-                    continue
-                itype = ind.get("type")
-                icontent = ind.get("content", "")
+        if "link" in h_lc and "wp-json" in h_lc["link"]:
+            matched_heuristics.add("wp_json_link")
+        if "wp-login.php" in url_lc and a.status_code in WP_LOGIN_CODES:
+            matched_heuristics.add("wp_login")
+        if "xmlrpc.php" in url_lc and a.status_code in {200, 405, 403}:
+            matched_heuristics.add("wp_xmlrpc")
+        if any(x in body_lc for x in ["wp-content", "wp-includes"]):
+            matched_heuristics.add("wp_assets")
 
-                # FIX: Ignorer les règles avec un contenu vide (évite les faux positifs)
-                if not icontent:
-                    continue
-
-                if itype == "body" and icontent in (a.response_analysis_snippet or ""):
-                    matched = True
-                    break
-                if itype == "header":
-                    # Correction B007: variable non utilisée
-                    for _, h_val in a.headers.items():
-                        if icontent.lower() in h_val.lower():
-                            matched = True
-                            break
-                if matched:
-                    break
-
-            if matched:
-                results[name] = results.get(name, 0) + 1
+    weights = {"wp_json_link": 0.6, "wp_login": 0.5, "wp_xmlrpc": 0.4, "wp_assets": 0.4}
+    score = sum(weights[h] for h in matched_heuristics)
 
     cms_name = "unknown"
-    confidence = "low"
+    confidence: Confidence = "low"
 
-    if results:
-        best_cms = max(results, key=lambda k: results[k])
-        count = results[best_cms]
-        cms_name = best_cms
-        confidence = "high" if count >= 1 else "medium"
+    if score >= 0.8:
+        cms_name, confidence = "wordpress", "high"
+    elif score >= 0.4:
+        cms_name, confidence = "wordpress", "medium"
 
     duration = int((time.perf_counter() - t0) * 1000)
 

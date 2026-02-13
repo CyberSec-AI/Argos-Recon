@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# On patche load_cms_rules, qui appelle load_json_list
 from app.core.data_loader import load_cms_rules
 from app.core.normalize import normalize_target
 from app.core.signals import extract_signals
@@ -55,10 +54,17 @@ def test_barrier_cms_robustness():
     )
     http = [
         HTTPRequestArtifactV1(
-            request_id="r1", target_id="t1", url="x", method="GET", timings_ms=TimingsMs(total=1)
+            request_id="r1",
+            target_id="t1",
+            url="x",
+            effective_url="x",
+            host="x",
+            ip="x",
+            port=80,  # Correction Arguments obligatoires
+            method="GET",
+            timings_ms=TimingsMs(total=1),
         )
     ]
-    # La règle vide {"content": ""} ne doit plus matcher grâce au fix dans cms.py
     bad_rules = [
         {"name": "wp", "indicators": [None, "string_invalide", {"type": "body", "content": ""}]}
     ]
@@ -70,8 +76,6 @@ def test_barrier_cms_robustness():
 def test_barrier_loader_immutability():
     mock_data = [{"name": "test", "indicators": [{"type": "body", "content": "marker"}]}]
 
-    # FIX: Utilisation de side_effect avec deepcopy pour renvoyer une NOUVELLE liste à chaque appel.
-    # Cela simule correctement le comportement de json.load() qui crée de nouveaux objets.
     with patch(
         "app.core.data_loader.load_json_list", side_effect=lambda _: copy.deepcopy(mock_data)
     ):
@@ -80,7 +84,6 @@ def test_barrier_loader_immutability():
         rules1[0]["name"] = "MUTATED"
 
         rules2 = load_cms_rules()
-        # rules2 est une nouvelle copie, donc elle a gardé le nom "test"
         assert rules2[0]["name"] == "test"
 
 
@@ -105,7 +108,6 @@ async def test_barrier_probe_di_logic():
     mock_resp.status_code = 200
     mock_resp.headers = {}
 
-    # FIX: Mock correct pour un itérateur asynchrone
     async def async_iter():
         yield b"ok"
 

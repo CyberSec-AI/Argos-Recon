@@ -5,7 +5,7 @@ from typing import List, Optional
 import ulid
 
 from app.schemas.finding_v1 import (
-    FindingEvidenceRefV1,
+    EvidenceV1,
     FindingScoreV1,
     FindingSignalRefV1,
     FindingTargetRefV1,
@@ -17,7 +17,6 @@ from app.schemas.types import Severity, SignalV1, TargetV1
 def evaluate_pb1(
     signals: List[SignalV1], target: TargetV1, tls_id: str, request_id: str
 ) -> Optional[FindingV1]:
-
     problem_signals = [s for s in signals if s.source == "tls" and s.value]
 
     if not problem_signals:
@@ -41,7 +40,7 @@ def evaluate_pb1(
 
     for s in problem_signals:
         evidence_list.append(
-            FindingEvidenceRefV1(
+            EvidenceV1(
                 evidence_id=f"ev_{str(ulid.new())}",
                 type="signal_ref",
                 ref={"signal_id": s.signal_id},
@@ -69,10 +68,9 @@ def evaluate_pb1(
             canonical_url=target.canonical_url,
         ),
         reasoning={
-            "why_it_matters": "Encryption integrity.",
-            "analyst_notes": "Fix TLS config.",
+            "why_it_matters": "Encryption integrity is crucial for data privacy.",
+            "analyst_notes": "Fix TLS configuration to match best practices.",
         },
         signals=signal_refs,
         evidence=evidence_list,
-        burp_artifacts={"urls": []},
     )

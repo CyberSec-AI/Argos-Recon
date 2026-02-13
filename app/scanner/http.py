@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from typing import Optional
+from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 import ulid
@@ -18,34 +19,28 @@ from app.core.config import (
 from app.core.stealth_profiles import STEALTH_PROFILES
 from app.schemas.types import HTTPRequestArtifactV1, TargetV1, TimingsMs
 
-# État global du scheduler pour le processus
 _last_reserved_time = 0.0
 _scheduler_lock = asyncio.Lock()
 
 
 def _build_url(target: TargetV1, path: str) -> str:
-    """Helper interne pour la construction d'URL sécurisée."""
     base = target.canonical_url.rstrip("/")
     if not base:
         scheme = target.scheme or "https"
         base = f"{scheme}://{target.host}"
-    clean_path = path if path.startswith("/") else f"/{path}"
-    return f"{base}{clean_path}"
+    return f"{base}{path if path.startswith('/') else '/' + path}"
 
 
 async def _global_throttle() -> None:
-    """Garantit un intervalle minimum entre les départs de requêtes (A.1 & A.3)."""
     global _last_reserved_time
     async with _scheduler_lock:
         now = time.monotonic()
         next_slot = max(now, _last_reserved_time) + GLOBAL_RATE_LIMIT
         wait_time = next_slot - now
         _last_reserved_time = next_slot
-
         actual_wait = max(0.0, wait_time)
         if ENABLE_JITTER:
             actual_wait += random.uniform(*JITTER_RANGE)
-
         if actual_wait > 0:
             await asyncio.sleep(actual_wait)
 
@@ -57,15 +52,20 @@ async def _fetch_single(
     client: httpx.AsyncClient,
     semaphore: Optional[asyncio.Semaphore] = None,
 ) -> HTTPRequestArtifactV1:
-    """Effectue une requête unique avec gestion de furtivité et résilience."""
     url = _build_url(target, path)
+    parsed = urlparse(url)
     t0 = time.perf_counter()
+    is_h = parsed.scheme == "https"
 
     req_art = HTTPRequestArtifactV1(
         request_id=str(ulid.new()),
         target_id=target.target_id,
         url=url,
         effective_url=url,
+        host=parsed.hostname or target.host,
+        ip=target.resolved_ips[0] if target.resolved_ips else "",
+        port=parsed.port or (443 if is_h else 80),
+        tls=is_h,
         method="GET",
         response_truncated=False,
         timings_ms=TimingsMs(),
@@ -83,18 +83,15 @@ async def _fetch_single(
             await _global_throttle()
 
         try:
-            # Copie pour éviter les effets de bord sur les profils mutables
             headers = dict(random.choice(STEALTH_PROFILES))
 
-            async def do_req(h: dict[str, str]) -> tuple[str, Optional[int], Optional[str]]:
+            async def do_req(h: dict[str, str]) -> Tuple[str, int, Optional[str]]:
                 async with client.stream("GET", url, headers=h) as resp:
                     if resp.status_code in retryable_codes:
                         return "retry", resp.status_code, resp.headers.get("Retry-After")
-
                     req_art.status_code = resp.status_code
                     req_art.effective_url = str(resp.url)
-                    req_art.headers = dict(resp.headers)
-
+                    req_art.headers = {k.lower(): str(v) for k, v in resp.headers.items()}
                     buffer = bytearray()
                     async for chunk in resp.aiter_bytes():
                         if len(buffer) + len(chunk) > max_bytes:
@@ -102,7 +99,6 @@ async def _fetch_single(
                             req_art.response_truncated = True
                             break
                         buffer.extend(chunk)
-
                     req_art.response_analysis_snippet = buffer.decode("utf-8", errors="replace")[
                         :2048
                     ]
@@ -117,20 +113,17 @@ async def _fetch_single(
             if status == "retry":
                 attempts += 1
                 if attempts > MAX_RETRIES:
-                    req_art.error = f"Max retries reached (HTTP {code})"
+                    req_art.error = f"MAX_RETRY_HTTP_{code}"
                     break
-
-                if r_val and r_val.isdigit():
-                    current_retry_delay = float(r_val)
-                else:
-                    current_retry_delay = float(BACKOFF_FACTOR**attempts)
+                current_retry_delay = (
+                    float(r_val) if (r_val and r_val.isdigit()) else float(BACKOFF_FACTOR**attempts)
+                )
                 continue
             break
-
         except Exception as e:
             attempts += 1
             if attempts > MAX_RETRIES:
-                req_art.error = f"Max retries reached: {str(e)}"
+                req_art.error = f"EXC:{type(e).__name__}"
                 break
             current_retry_delay = float(BACKOFF_FACTOR**attempts)
 
@@ -139,39 +132,42 @@ async def _fetch_single(
 
 
 async def fetch_http_baseline(
-    target: TargetV1, response_raw_max_bytes: int, client: httpx.AsyncClient
+    target: TargetV1, max_bytes: int, client: httpx.AsyncClient
 ) -> HTTPRequestArtifactV1:
-    return await _fetch_single(target, "/", response_raw_max_bytes, client)
+    return await _fetch_single(target, "/", max_bytes, client)
 
 
 async def probe_paths(
     target: TargetV1,
-    paths: list[str],
-    response_raw_max_bytes: int,
+    paths: List[str],
+    max_bytes: int,
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
-) -> list[HTTPRequestArtifactV1]:
-    tasks = [_fetch_single(target, p, response_raw_max_bytes, client, semaphore) for p in paths]
+) -> List[HTTPRequestArtifactV1]:
+    tasks = [_fetch_single(target, p, max_bytes, client, semaphore) for p in paths]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    final_artifacts: list[HTTPRequestArtifactV1] = []
+    final: List[HTTPRequestArtifactV1] = []
     for i, res in enumerate(results):
         if isinstance(res, HTTPRequestArtifactV1):
-            final_artifacts.append(res)
+            final.append(res)
         else:
-            # Sécurisation de l'artefact d'erreur avec les champs requis (symétrie)
-            err_msg = str(res) if isinstance(res, Exception) else "Unknown crash"
-            err_url = _build_url(target, paths[i])
-            err_art = HTTPRequestArtifactV1(
-                request_id=str(ulid.new()),
-                target_id=target.target_id,
-                url=err_url,
-                effective_url=err_url,
-                method="GET",
-                response_truncated=False,
-                error=f"Probe crash: {err_msg}",
-                timings_ms=TimingsMs(total=0),
+            url = _build_url(target, paths[i])
+            p = urlparse(url)
+            ish = p.scheme == "https"
+            final.append(
+                HTTPRequestArtifactV1(
+                    request_id=str(ulid.new()),
+                    target_id=target.target_id,
+                    url=url,
+                    effective_url=url,
+                    host=p.hostname or target.host,
+                    ip=target.resolved_ips[0] if target.resolved_ips else "",
+                    port=p.port or (443 if ish else 80),
+                    tls=ish,
+                    method="GET",
+                    error=f"CRASH:{str(res)}",
+                    timings_ms=TimingsMs(),
+                )
             )
-            final_artifacts.append(err_art)
-
-    return final_artifacts
+    return final
